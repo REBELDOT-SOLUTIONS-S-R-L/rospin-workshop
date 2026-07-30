@@ -168,6 +168,26 @@ def verify() -> dict:
         "SO101_MESH_DIR", str(DEFAULT_ROBOT_DIR / "assets")
     )
     workshop_model = mujoco.MjModel.from_xml_string(workshop_xml)
+    robot_mount_id = mujoco.mj_name2id(
+        workshop_model, mujoco.mjtObj.mjOBJ_BODY, "robot_mount"
+    )
+    mount_position = np.asarray(manifest["robot"]["mount_position"])
+    mount_euler = np.asarray(manifest["robot"]["mount_orientation_euler_xyz"])
+    np.testing.assert_allclose(
+        workshop_model.body_pos[robot_mount_id],
+        mount_position,
+        atol=1e-8,
+    )
+    if not np.allclose(mount_euler[:2], 0.0):
+        raise AssertionError("The mount verifier expects a pure world-Z yaw")
+    mount_half_yaw = mount_euler[2] / 2.0
+    expected_mount_quaternion = np.array(
+        [np.cos(mount_half_yaw), 0.0, 0.0, np.sin(mount_half_yaw)]
+    )
+    _assert_quaternion_equivalent(
+        workshop_model.body_quat[robot_mount_id],
+        expected_mount_quaternion,
+    )
 
     for native_body_id in range(1, native_model.nbody):
         name = mujoco.mj_id2name(native_model, mujoco.mjtObj.mjOBJ_BODY, native_body_id)
@@ -309,6 +329,8 @@ def verify() -> dict:
         "unique_stl_meshes": len(urdf_mesh_files),
         "rendered_mesh_instances": visual_instances,
         "compiled_pose_samples": len(pose_samples),
+        "mount_position": mount_position.tolist(),
+        "mount_orientation_euler_xyz": mount_euler.tolist(),
         "home_joint_positions": home.tolist(),
         "status": "in sync",
     }

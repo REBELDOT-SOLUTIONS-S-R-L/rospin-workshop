@@ -3,7 +3,7 @@
 A portable, browser-operated robotics workshop stack:
 
 - MuJoCo physics with a custom Gymnasium environment
-- 6-DoF end-effector keyboard teleoperation
+- Cartesian end-effector translation and direct-joint keyboard teleoperation
 - wrist and fixed perspective camera observations
 - local LeRobot v3.0 episode recording
 - local ACT policy training through `lerobot-train`
@@ -49,20 +49,25 @@ dataset or task field, click the highlighted control panel again, then hold:
 | `W` / `S` | end effector +X / −X |
 | `A` / `D` | end effector +Y / −Y |
 | `Q` / `E` | end effector +Z / −Z |
-| `I` / `K` | roll about world +X / −X |
-| `J` / `L` | pitch about world +Y / −Y |
-| `U` / `O` | yaw about world +Z / −Z |
+| `I` / `K` | wrist flex + / − |
+| `J` / `L` | wrist roll + / − |
+| `U` / `O` | shoulder pan + / − |
 | `[` / `]` | close / open gripper |
 
 The Gymnasium action is
-`[eef_dx, eef_dy, eef_dz, eef_droll, eef_dpitch, eef_dyaw, gripper_delta]`
-in `[-1, 1]`. A weighted damped least-squares Jacobian controller maps
-world-frame translation and rotation commands to the five arm joints. Because
-SO-101 has five arm degrees of freedom, arbitrary six-dimensional poses are
-underactuated; the controller produces the closest differential motion and
-prioritizes translation. MuJoCo position actuators execute the resulting joint
-targets. Full-scale held keys command at most 8 cm/s translation or 0.5 rad/s
-rotation, independent of the configured control rate.
+`[eef_dx, eef_dy, eef_dz, shoulder_pan_delta, wrist_flex_delta,`
+`wrist_roll_delta, gripper_delta]` in `[-1, 1]`. Damped least-squares IK maps
+only the world-frame translation command to the five arm joints. Rotation
+buttons address the named joint directly, so a wrist-roll command cannot be
+redistributed across the whole arm. This follows LeIsaac's separation of
+Cartesian IK and direct SO-101 joint control while retaining the requested
+three-axis Cartesian translation keys.
+
+The robot mount faces 90 degrees toward world −Y, into the usable half of the
+table. The perspective camera is behind it on the +Y side. Full-scale held keys
+command at most 12 cm/s translation or 0.8 rad/s joint motion, independent of
+the configured control rate. Releasing all keys synchronizes position targets
+to the current pose so the robot stops instead of finishing a queued motion.
 
 ## Record a local LeRobot v3 dataset
 
@@ -91,10 +96,13 @@ Every frame contains:
 | `observation.images.perspective` | `(H, W, 3)` | fixed RGB, H.264 video |
 | `action` | `(7,)` | translation, rotation, and gripper command |
 
-Physics and keyboard input run at 20 Hz independently from the two-camera
-renderer. The original STL meshes are detailed enough that portable CPU
-software rendering is configured at 5 FPS; recordings use that same camera
-rate so their timestamps and H.264 streams remain consistent.
+Physics and keyboard input run at 60 Hz independently from two camera-specific
+render workers. The workers use separate software-rendering contexts so the
+wrist and perspective images are produced in parallel at 15 FPS; recordings
+pair frames from the same simulation snapshot, keeping timestamps and H.264
+streams consistent. Both scene lights have shadows disabled because the
+redundant software shadow pass nearly doubled camera latency without helping
+workshop control.
 
 Datasets are never pushed to Hugging Face Hub. Because v3 metadata does not
 serialize `repo_id`, the tools deterministically use `local/<dataset-directory>`
@@ -212,8 +220,8 @@ Set environment variables in `compose.yaml`:
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `ROSPIN_CONTROL_HZ` | `20` | simulation physics and keyboard command rate |
-| `ROSPIN_CAMERA_HZ` | `5` | browser camera and dataset recording FPS |
+| `ROSPIN_CONTROL_HZ` | `60` | simulation physics and keyboard command rate |
+| `ROSPIN_CAMERA_HZ` | `15` | browser camera and dataset recording FPS |
 | `ROSPIN_IMAGE_WIDTH` | `320` | both camera widths |
 | `ROSPIN_IMAGE_HEIGHT` | `240` | both camera heights |
 | `ROSPIN_DATA_ROOT` | `/workspace/data` | datasets and training outputs |

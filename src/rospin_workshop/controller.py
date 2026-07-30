@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 from rospin_workshop.config import RuntimeConfig
-from rospin_workshop.env import ACTION_NAMES, SO101WorkshopEnv
+from rospin_workshop.env import ACTION_NAMES, CAMERA_NAMES, SO101WorkshopEnv
 from rospin_workshop.recorder import LeRobotV3Recorder
 
 LOGGER = logging.getLogger(__name__)
@@ -23,12 +23,12 @@ KEY_ACTIONS: dict[str, np.ndarray] = {
     "d": np.array([0, -1, 0, 0, 0, 0, 0], dtype=np.float32),
     "q": np.array([0, 0, 1, 0, 0, 0, 0], dtype=np.float32),
     "e": np.array([0, 0, -1, 0, 0, 0, 0], dtype=np.float32),
-    "i": np.array([0, 0, 0, 1, 0, 0, 0], dtype=np.float32),
-    "k": np.array([0, 0, 0, -1, 0, 0, 0], dtype=np.float32),
-    "j": np.array([0, 0, 0, 0, 1, 0, 0], dtype=np.float32),
-    "l": np.array([0, 0, 0, 0, -1, 0, 0], dtype=np.float32),
-    "u": np.array([0, 0, 0, 0, 0, 1, 0], dtype=np.float32),
-    "o": np.array([0, 0, 0, 0, 0, -1, 0], dtype=np.float32),
+    "i": np.array([0, 0, 0, 0, 1, 0, 0], dtype=np.float32),
+    "k": np.array([0, 0, 0, 0, -1, 0, 0], dtype=np.float32),
+    "j": np.array([0, 0, 0, 0, 0, 1, 0], dtype=np.float32),
+    "l": np.array([0, 0, 0, 0, 0, -1, 0], dtype=np.float32),
+    "u": np.array([0, 0, 0, 1, 0, 0, 0], dtype=np.float32),
+    "o": np.array([0, 0, 0, -1, 0, 0, 0], dtype=np.float32),
     "[": np.array([0, 0, 0, 0, 0, 0, -1], dtype=np.float32),
     "]": np.array([0, 0, 0, 0, 0, 0, 1], dtype=np.float32),
 }
@@ -41,9 +41,9 @@ class WorkshopController:
         if config.camera_hz > config.control_hz:
             raise ValueError("camera_hz cannot exceed control_hz")
         self.config = config
-        # Each MuJoCo instance has one owner: the control thread advances the
-        # physics-only environment, while the render thread owns the OSMesa
-        # context and a synchronized rendering copy.
+        # Each MuJoCo instance has one owner: the control thread advances
+        # physics, while one worker per camera owns an independent OSMesa
+        # context. Both camera workers receive the same simulation snapshot.
         self.env: SO101WorkshopEnv | None = None
         self._observation: dict[str, np.ndarray] | None = None
         self._jpeg_frames: dict[str, bytes] = {}
@@ -66,6 +66,7 @@ class WorkshopController:
             "eef_position": None,
             "eef_orientation": None,
             "joint_positions": None,
+            "joint_targets": None,
             "sim_time": None,
             "control_hz": self.config.control_hz,
             "camera_hz": self.config.camera_hz,
@@ -73,16 +74,22 @@ class WorkshopController:
         }
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
-        self._render_requests: queue.Queue[
-            tuple[
-                dict[str, np.ndarray | float],
-                np.ndarray,
-                int | None,
-                int,
-            ]
-        ] = queue.Queue(maxsize=1)
+        self._render_requests: dict[
+            str,
+            queue.Queue[
+                tuple[
+                    int,
+                    dict[str, np.ndarray | float],
+                    np.ndarray,
+                    int | None,
+                    int,
+                ]
+            ],
+        ] = {camera: queue.Queue(maxsize=1) for camera in CAMERA_NAMES}
         self._render_results: queue.Queue[
             tuple[
+                int,
+                str,
                 dict[str, np.ndarray] | None,
                 np.ndarray | None,
                 int | None,
@@ -91,6 +98,9 @@ class WorkshopController:
             ]
         ] = queue.Queue()
         self._render_inflight = False
+        self._render_sequence = 0
+        self._pending_renders: dict[int, dict[str, Any]] = {}
+        self._render_requested = threading.Event()
         self._render_epoch = 0
         self._recording_generation = 0
         self._commands: queue.Queue[
@@ -99,9 +109,15 @@ class WorkshopController:
         self._thread = threading.Thread(
             target=self._control_loop, name="so101-control", daemon=True
         )
-        self._render_thread = threading.Thread(
-            target=self._render_loop, name="so101-render", daemon=True
-        )
+        self._render_threads = [
+            threading.Thread(
+                target=self._render_loop,
+                args=(camera,),
+                name=f"so101-render-{camera}",
+                daemon=True,
+            )
+            for camera in CAMERA_NAMES
+        ]
 
     def start(self) -> None:
         self._thread.start()
@@ -119,10 +135,17 @@ class WorkshopController:
                 self._keys.add(key)
             else:
                 self._keys.discard(key)
+            self._status_cache = {
+                **self._status_cache,
+                "keys": sorted(self._keys),
+            }
+        self._render_requested.set()
 
     def clear_keys(self) -> None:
         with self._lock:
             self._keys.clear()
+            self._status_cache = {**self._status_cache, "keys": []}
+        self._render_requested.set()
 
     def _current_action(self) -> np.ndarray:
         action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
@@ -133,16 +156,12 @@ class WorkshopController:
         return np.clip(action, -1.0, 1.0)
 
     @staticmethod
-    def _encode_images(observation: dict[str, np.ndarray]) -> dict[str, bytes]:
-        frames: dict[str, bytes] = {}
-        for camera in ("wrist", "perspective"):
-            rgb = observation[f"observation.images.{camera}"]
-            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-            ok, encoded = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 86])
-            if not ok:
-                raise RuntimeError(f"Could not encode {camera} camera")
-            frames[camera] = encoded.tobytes()
-        return frames
+    def _encode_image(camera: str, rgb: np.ndarray) -> bytes:
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        ok, encoded = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 86])
+        if not ok:
+            raise RuntimeError(f"Could not encode {camera} camera")
+        return encoded.tobytes()
 
     def _control_loop(self) -> None:
         try:
@@ -153,10 +172,15 @@ class WorkshopController:
                 control_hz=self.config.control_hz,
             )
             self._observation, _ = self.env.reset()
-            self._render_thread.start()
+            for render_thread in self._render_threads:
+                render_thread.start()
             self._submit_render(np.zeros(len(ACTION_NAMES), dtype=np.float32))
-            initial_result = self._render_results.get(timeout=30)
-            self._consume_render_result(initial_result)
+            startup_deadline = time.monotonic() + 30
+            while self._render_inflight:
+                timeout = startup_deadline - time.monotonic()
+                if timeout <= 0:
+                    raise TimeoutError("Initial camera rendering timed out")
+                self._consume_render_result(self._render_results.get(timeout=timeout))
             self._ready_event.set()
 
             period = 1.0 / self.config.control_hz
@@ -170,11 +194,18 @@ class WorkshopController:
                 self._collect_render_results()
 
                 now = time.monotonic()
-                if not self._render_inflight and now >= next_camera_tick:
+                render_requested = self._render_requested.is_set()
+                if not self._render_inflight and (
+                    render_requested or now >= next_camera_tick
+                ):
                     self._submit_render(action)
-                    next_camera_tick += camera_period
-                    if next_camera_tick <= now:
+                    self._render_requested.clear()
+                    if render_requested:
                         next_camera_tick = now + camera_period
+                    else:
+                        next_camera_tick += camera_period
+                        if next_camera_tick <= now:
+                            next_camera_tick = now + camera_period
 
                 with self._lock:
                     self._refresh_status_locked()
@@ -194,8 +225,9 @@ class WorkshopController:
             self._ready_event.set()
         finally:
             self._stop_event.set()
-            if self._render_thread.is_alive():
-                self._render_thread.join(timeout=30)
+            for render_thread in self._render_threads:
+                if render_thread.is_alive():
+                    render_thread.join(timeout=30)
             if self._recorder is not None and not self._recorder.finalized:
                 try:
                     self._last_dataset_path = self._recorder.finalize()
@@ -204,7 +236,7 @@ class WorkshopController:
             if self.env is not None:
                 self.env.close()
 
-    def _render_loop(self) -> None:
+    def _render_loop(self, camera: str) -> None:
         render_env: SO101WorkshopEnv | None = None
         try:
             render_env = SO101WorkshopEnv(
@@ -215,15 +247,17 @@ class WorkshopController:
             )
             while not self._stop_event.is_set():
                 try:
-                    snapshot, action, recording_generation, epoch = (
-                        self._render_requests.get(timeout=0.1)
+                    sequence, snapshot, action, recording_generation, epoch = (
+                        self._render_requests[camera].get(timeout=0.1)
                     )
                 except queue.Empty:
                     continue
                 render_env.restore_simulation_snapshot(snapshot)
-                observation = render_env.capture_observation()
+                observation = render_env.capture_camera_observation(camera)
                 self._render_results.put(
                     (
+                        sequence,
+                        camera,
                         observation,
                         action,
                         recording_generation,
@@ -232,8 +266,8 @@ class WorkshopController:
                     )
                 )
         except BaseException as exc:
-            LOGGER.exception("Camera render loop failed")
-            self._render_results.put((None, None, None, -1, exc))
+            LOGGER.exception("%s camera render loop failed", camera)
+            self._render_results.put((-1, camera, None, None, None, -1, exc))
         finally:
             if render_env is not None:
                 render_env.close()
@@ -246,14 +280,27 @@ class WorkshopController:
             if self._recorder is not None and self._recorder.recording
             else None
         )
-        self._render_requests.put_nowait(
-            (
-                self.env.simulation_snapshot(),
-                np.asarray(action, dtype=np.float32).copy(),
-                recording_generation,
-                self._render_epoch,
+        self._render_sequence += 1
+        sequence = self._render_sequence
+        snapshot = self.env.simulation_snapshot()
+        action_copy = np.asarray(action, dtype=np.float32).copy()
+        self._pending_renders[sequence] = {
+            "observation": {},
+            "cameras": set(),
+            "action": action_copy,
+            "recording_generation": recording_generation,
+            "epoch": self._render_epoch,
+        }
+        for camera in CAMERA_NAMES:
+            self._render_requests[camera].put_nowait(
+                (
+                    sequence,
+                    snapshot,
+                    action_copy,
+                    recording_generation,
+                    self._render_epoch,
+                )
             )
-        )
         self._render_inflight = True
 
     def _collect_render_results(self) -> None:
@@ -267,6 +314,8 @@ class WorkshopController:
     def _consume_render_result(
         self,
         result: tuple[
+            int,
+            str,
             dict[str, np.ndarray] | None,
             np.ndarray | None,
             int | None,
@@ -274,22 +323,41 @@ class WorkshopController:
             BaseException | None,
         ],
     ) -> None:
-        observation, action, recording_generation, epoch, error = result
-        self._render_inflight = False
+        sequence, camera, observation, action, recording_generation, epoch, error = (
+            result
+        )
         if error is not None:
             raise RuntimeError("Camera rendering failed") from error
-        if observation is None or action is None or epoch != self._render_epoch:
+        pending = self._pending_renders.get(sequence)
+        if pending is None or observation is None or action is None:
+            return
+        pending["cameras"].add(camera)
+        if epoch == self._render_epoch:
+            for name, value in observation.items():
+                if not name.startswith("observation.images."):
+                    pending["observation"].setdefault(name, value)
+            image_key = f"observation.images.{camera}"
+            pending["observation"][image_key] = observation[image_key]
+            jpeg = self._encode_image(camera, observation[image_key])
+            with self._lock:
+                self._jpeg_frames[camera] = jpeg
+
+        if pending["cameras"] != set(CAMERA_NAMES):
+            return
+
+        self._pending_renders.pop(sequence)
+        self._render_inflight = False
+        paired_observation = pending["observation"]
+        if epoch != self._render_epoch:
             return
         if (
             self._recorder is not None
             and self._recorder.recording
             and recording_generation == self._recording_generation
         ):
-            self._recorder.add_frame(observation, action)
-        jpeg_frames = self._encode_images(observation)
+            self._recorder.add_frame(paired_observation, action)
         with self._lock:
-            self._observation = observation
-            self._jpeg_frames = jpeg_frames
+            self._observation = paired_observation
             self._refresh_status_locked()
 
     def _process_commands(self) -> None:
@@ -300,7 +368,7 @@ class WorkshopController:
                 return
             try:
                 self._execute_command(command, payload)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - return command errors to caller
                 response["error"] = exc
             finally:
                 with self._lock:
@@ -336,6 +404,7 @@ class WorkshopController:
                     self._keys.clear()
                 self._observation, _ = self.env.reset()
                 self._render_epoch += 1
+                self._render_requested.set()
                 self._message = "Simulation reset"
             elif command == "start_recording":
                 if self._recorder is None or self._recorder.finalized:
@@ -350,6 +419,7 @@ class WorkshopController:
                     dataset_name=str(payload.get("dataset_name", "so101_session")),
                     task=str(payload.get("task", "")),
                 )
+                self._render_requested.set()
                 self._message = "Recording episode"
             elif command == "stop_recording":
                 recorder = self._require_recorder(recording=True)
@@ -410,6 +480,11 @@ class WorkshopController:
             ),
             "joint_positions": (
                 self.env.joint_positions.round(4).tolist()
+                if self.env is not None
+                else None
+            ),
+            "joint_targets": (
+                self.env.data.ctrl.round(4).tolist()
                 if self.env is not None
                 else None
             ),

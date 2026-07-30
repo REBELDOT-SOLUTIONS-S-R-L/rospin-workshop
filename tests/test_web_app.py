@@ -32,14 +32,22 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         translated = client.get("/api/status").json()
         assert translated["eef_position"][0] > initial["eef_position"][0] + 0.005
 
+        time.sleep(0.1)
+        translated = client.get("/api/status").json()
+        before_joints = np.asarray(translated["joint_positions"])
+        before_targets = np.asarray(translated["joint_targets"])
         with client.websocket_connect("/ws") as socket:
-            socket.send_json({"type": "key", "key": "u", "pressed": True})
+            socket.send_json({"type": "key", "key": "j", "pressed": True})
             socket.receive_json()
             time.sleep(0.5)
-            socket.send_json({"type": "key", "key": "u", "pressed": False})
+            active = client.get("/api/status").json()
+            socket.send_json({"type": "key", "key": "j", "pressed": False})
             socket.receive_json()
         rotated = client.get("/api/status").json()
-        before = np.asarray(translated["eef_orientation"])
-        after = np.asarray(rotated["eef_orientation"])
-        angle = 2 * np.arccos(np.clip(abs(np.dot(before, after)), 0.0, 1.0))
-        assert angle > 0.05
+        after_joints = np.asarray(rotated["joint_positions"])
+        assert after_joints[4] > before_joints[4] + 0.01
+        active_targets = np.asarray(active["joint_targets"])
+        target_changes = np.flatnonzero(
+            np.abs(active_targets[:5] - before_targets[:5]) > 0.01
+        )
+        assert target_changes.tolist() == [4]

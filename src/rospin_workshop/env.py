@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from importlib.resources import as_file, files
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from xml.sax.saxutils import escape
 
 import gymnasium as gym
@@ -25,9 +25,9 @@ ACTION_NAMES = (
     "eef_dx",
     "eef_dy",
     "eef_dz",
-    "eef_droll",
-    "eef_dpitch",
-    "eef_dyaw",
+    "shoulder_pan_delta",
+    "wrist_flex_delta",
+    "wrist_roll_delta",
     "gripper_delta",
 )
 
@@ -50,15 +50,19 @@ def _so101_asset_dir() -> Path:
 
 
 class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
-    """MuJoCo/Gymnasium environment controlled by Cartesian EEF increments.
+    """MuJoCo/Gymnasium environment with Cartesian translation and joint rotation.
 
     Actions are normalized deltas
-    ``[dx, dy, dz, droll, dpitch, dyaw, gripper]`` in ``[-1, 1]``.
-    The world-frame translation and rotation components are mapped to the five
-    arm joint targets by weighted damped least-squares differential IK.
+    ``[dx, dy, dz, shoulder_pan, wrist_flex, wrist_roll, gripper]`` in
+    ``[-1, 1]``. World-frame EEF translation uses damped least-squares
+    differential IK. Rotation controls address real joints directly so a wrist
+    command cannot be redistributed across the entire arm.
     """
 
-    metadata = {"render_modes": ["rgb_array"], "render_fps": 20}
+    metadata: ClassVar[dict[str, Any]] = {
+        "render_modes": ["rgb_array"],
+        "render_fps": 15,
+    }
 
     def __init__(
         self,
@@ -67,12 +71,11 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         render_mode: str | None = "rgb_array",
         image_width: int = 320,
         image_height: int = 240,
-        control_hz: int = 20,
-        translation_speed: float = 0.08,
-        rotation_speed: float = 0.5,
-        gripper_speed: float = 0.35,
+        control_hz: int = 60,
+        translation_speed: float = 0.12,
+        joint_speed: float = 0.8,
+        gripper_speed: float = 0.8,
         ik_damping: float = 0.04,
-        ik_rotation_weight: float = 0.35,
         max_joint_step: float = 0.10,
     ) -> None:
         super().__init__()
@@ -86,10 +89,9 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self.image_height = image_height
         self.control_hz = control_hz
         self.translation_step = translation_speed / control_hz
-        self.rotation_step = rotation_speed / control_hz
+        self.joint_step = joint_speed / control_hz
         self.gripper_step = gripper_speed / control_hz
         self.ik_damping = ik_damping
-        self.ik_rotation_weight = ik_rotation_weight
         self.max_joint_step = max_joint_step
 
         if model_path is None:
@@ -136,6 +138,9 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self._physics_steps = max(
             1, round((1.0 / self.control_hz) / float(self.model.opt.timestep))
         )
+        # Keep simulation time synchronized with wall time even when the
+        # configured control period is not an integer multiple of the XML step.
+        self.model.opt.timestep = 1.0 / (self.control_hz * self._physics_steps)
         self._renderer = (
             mujoco.Renderer(
                 self.model, height=self.image_height, width=self.image_width
@@ -144,6 +149,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             else None
         )
         self._last_images: dict[str, np.ndarray] | None = None
+        self._previous_action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
 
         def image_space() -> spaces.Box:
             return spaces.Box(
@@ -216,6 +222,18 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self._last_images = images
         return images
 
+    def capture_camera_observation(self, camera: str) -> dict[str, np.ndarray]:
+        """Capture state and one camera for a dedicated render worker."""
+
+        if self._renderer is None:
+            raise RuntimeError("Camera rendering requires render_mode='rgb_array'")
+        if camera not in CAMERA_NAMES:
+            raise KeyError(camera)
+        observation = self._get_state_obs()
+        self._renderer.update_scene(self.data, camera=camera)
+        observation[f"observation.images.{camera}"] = self._renderer.render().copy()
+        return observation
+
     def _get_state_obs(self) -> dict[str, np.ndarray]:
         return {
             "observation.state": self.joint_positions,
@@ -243,38 +261,53 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             "sim_time": float(self.data.time),
         }
 
-    def _apply_cartesian_action(self, action: np.ndarray) -> None:
+    def _apply_action(self, action: np.ndarray) -> None:
+        if not np.any(action):
+            # A released key must stop the robot at its current pose instead of
+            # letting a queued position target continue moving it. Latch only
+            # on the active-to-idle transition; repeatedly following qpos would
+            # let gravity walk the idle robot downward.
+            if np.any(self._previous_action):
+                self.data.ctrl[:] = self.joint_positions
+            self._previous_action = action.copy()
+            return
+
         position_delta = action[:3] * self.translation_step
-        rotation_delta = action[3:6] * self.rotation_step
         jac_pos = np.zeros((3, self.model.nv), dtype=np.float64)
         jac_rot = np.zeros((3, self.model.nv), dtype=np.float64)
         mujoco.mj_jacSite(self.model, self.data, jac_pos, jac_rot, self._eef_site_id)
-        jacobian = np.vstack(
-            (
-                jac_pos[:, self._arm_dof_indices],
-                self.ik_rotation_weight * jac_rot[:, self._arm_dof_indices],
-            )
-        )
-        task_delta = np.concatenate(
-            (position_delta, self.ik_rotation_weight * rotation_delta)
-        )
-        regularizer = (self.ik_damping**2) * np.eye(len(ARM_JOINT_NAMES))
-        joint_delta = np.linalg.solve(
-            jacobian.T @ jacobian + regularizer,
-            jacobian.T @ task_delta,
+        jacobian = jac_pos[:, self._arm_dof_indices]
+        regularizer = (self.ik_damping**2) * np.eye(3)
+        joint_delta = jacobian.T @ np.linalg.solve(
+            jacobian @ jacobian.T + regularizer,
+            position_delta,
         )
         joint_delta = np.clip(joint_delta, -self.max_joint_step, self.max_joint_step)
 
-        arm_targets = self.data.ctrl[:-1] + joint_delta
+        arm_targets = self.data.ctrl[:-1].copy()
+        if np.any(self._previous_action[:3]) and not np.any(action[:3]):
+            # Cancel the multi-joint IK target before beginning a direct-joint
+            # command, even when the user switches keys between control ticks.
+            arm_targets[:] = self.joint_positions[:-1]
+        arm_targets += joint_delta
+        for action_index, joint_index in ((3, 0), (4, 3), (5, 4)):
+            if self._previous_action[action_index] and not action[action_index]:
+                arm_targets[joint_index] = self.joint_positions[joint_index]
+        arm_targets[0] += action[3] * self.joint_step
+        arm_targets[3] += action[4] * self.joint_step
+        arm_targets[4] += action[5] * self.joint_step
         arm_ranges = self.model.jnt_range[self._joint_ids[:-1]]
         self.data.ctrl[:-1] = np.clip(arm_targets, arm_ranges[:, 0], arm_ranges[:, 1])
 
         gripper_range = self.model.jnt_range[self._joint_ids[-1]]
+        if self._previous_action[6] and not action[6]:
+            self.data.ctrl[-1] = self.joint_positions[-1]
         self.data.ctrl[-1] = np.clip(
             self.data.ctrl[-1] + action[6] * self.gripper_step,
             gripper_range[0],
             gripper_range[1],
         )
+        self._previous_action = action.copy()
 
     def step_dynamics(
         self, action: np.ndarray
@@ -287,7 +320,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
                 f"Expected action shape {self.action_space.shape}, got {action.shape}"
             )
         action = np.clip(action, self.action_space.low, self.action_space.high)
-        self._apply_cartesian_action(action)
+        self._apply_action(action)
         for _ in range(self._physics_steps):
             mujoco.mj_step(self.model, self.data)
         return self._get_state_obs(), 0.0, False, False, self._get_info()
@@ -344,6 +377,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             mujoco.mj_resetDataKeyframe(self.model, self.data, home_key)
         else:
             mujoco.mj_resetData(self.model, self.data)
+        self._previous_action.fill(0)
         mujoco.mj_forward(self.model, self.data)
         observation = (
             self._get_obs() if self._renderer is not None else self._get_state_obs()

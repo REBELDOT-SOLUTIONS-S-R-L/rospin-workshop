@@ -81,7 +81,7 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
                             str(message.get("command", "")),
                             dict(message.get("payload", {})),
                         )
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 - report command errors
                         await websocket.send_json(
                             {"type": "error", "message": str(exc)}
                         )

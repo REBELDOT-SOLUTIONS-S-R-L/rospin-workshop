@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import numpy as np
 import gymnasium as gym
+import numpy as np
 from gymnasium.envs.registration import EnvSpec
 from gymnasium.utils.env_checker import check_env
 
@@ -45,9 +45,9 @@ def test_cartesian_action_moves_eef_and_respects_joint_limits() -> None:
     try:
         env.reset()
         start = env.eef_position.copy()
-        for _ in range(4):
+        for _ in range(12):
             env.step(np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32))
-        assert np.linalg.norm(env.eef_position - start) > 0.005
+        assert np.linalg.norm(env.eef_position - start) > 0.01
         ranges = env.model.jnt_range[env._joint_ids]
         assert np.all(env.data.ctrl >= ranges[:, 0] - 1e-8)
         assert np.all(env.data.ctrl <= ranges[:, 1] + 1e-8)
@@ -55,17 +55,49 @@ def test_cartesian_action_moves_eef_and_respects_joint_limits() -> None:
         env.close()
 
 
-def test_cartesian_rotation_action_changes_eef_orientation() -> None:
-    env = SO101WorkshopEnv(image_width=64, image_height=48)
+def test_rotation_actions_address_only_the_named_joint_target() -> None:
+    env = SO101WorkshopEnv(
+        render_mode=None,
+        image_width=64,
+        image_height=48,
+        control_hz=60,
+    )
     try:
         env.reset()
-        start = env.eef_orientation.copy()
-        for _ in range(4):
-            env.step(np.array([0, 0, 0, 0, 0, 1, 0], dtype=np.float32))
-        rotation_angle = 2 * np.arccos(
-            np.clip(abs(np.dot(start, env.eef_orientation)), 0.0, 1.0)
-        )
-        assert rotation_angle > 0.02
+        for action_index, joint_index in ((3, 0), (4, 3), (5, 4)):
+            before = env.data.ctrl.copy()
+            action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+            action[action_index] = 1
+            env.step_dynamics(action)
+            changed = np.flatnonzero(np.abs(env.data.ctrl - before) > 1e-8)
+            assert changed.tolist() == [joint_index]
+            env.reset()
+    finally:
+        env.close()
+
+
+def test_releasing_controls_cancels_queued_servo_motion() -> None:
+    env = SO101WorkshopEnv(render_mode=None, control_hz=60)
+    try:
+        env.reset()
+        action = np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
+        for _ in range(12):
+            env.step_dynamics(action)
+        env.step_dynamics(np.zeros(len(ACTION_NAMES), dtype=np.float32))
+        np.testing.assert_allclose(env.data.ctrl, env.joint_positions, atol=0.01)
+    finally:
+        env.close()
+
+
+def test_idle_controller_holds_the_latched_pose() -> None:
+    env = SO101WorkshopEnv(render_mode=None, control_hz=60)
+    try:
+        env.reset()
+        start = env.eef_position.copy()
+        idle = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+        for _ in range(300):
+            env.step_dynamics(idle)
+        assert np.linalg.norm(env.eef_position - start) < 0.01
     finally:
         env.close()
 

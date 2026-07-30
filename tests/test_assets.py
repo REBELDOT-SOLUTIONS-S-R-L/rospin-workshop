@@ -86,6 +86,24 @@ def test_compiled_link_and_mesh_poses_match_mujoco_urdf_importer() -> None:
         "SO101_MESH_DIR", str(ROBOT_DIR / "assets")
     )
     workshop_model = mujoco.MjModel.from_xml_string(workshop_xml)
+    robot_mount_id = mujoco.mj_name2id(
+        workshop_model, mujoco.mjtObj.mjOBJ_BODY, "robot_mount"
+    )
+    np.testing.assert_allclose(
+        workshop_model.body_pos[robot_mount_id],
+        [0.0, 0.23, 0.7545030483],
+    )
+    expected_mount_quaternion = np.array(
+        [np.sqrt(0.5), 0.0, 0.0, -np.sqrt(0.5)]
+    )
+    assert np.isclose(
+        abs(np.dot(workshop_model.body_quat[robot_mount_id], expected_mount_quaternion)),
+        1.0,
+    )
+    perspective_id = mujoco.mj_name2id(
+        workshop_model, mujoco.mjtObj.mjOBJ_CAMERA, "perspective"
+    )
+    assert workshop_model.cam_pos[perspective_id, 1] > 0.23
 
     for native_body_id in range(1, native_model.nbody):
         body_name = mujoco.mj_id2name(

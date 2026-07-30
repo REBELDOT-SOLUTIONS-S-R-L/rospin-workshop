@@ -35,7 +35,12 @@ def main() -> None:
                 observation, _, _, _, _ = env.step(action)
                 recorder.add_frame(observation, action)
             translated_position = env.eef_position.copy()
+            brake_action = np.zeros(7, dtype=np.float32)
+            observation, _, _, _, _ = env.step(brake_action)
+            recorder.add_frame(observation, brake_action)
             rotation_start = env.eef_orientation.copy()
+            joint_start = env.joint_positions.copy()
+            target_start = env.data.ctrl.copy()
             for _ in range(10):
                 action = np.array([0, 0, 0, 0, 0, 1, 0], dtype=np.float32)
                 observation, _, _, _, _ = env.step(action)
@@ -57,7 +62,17 @@ def main() -> None:
                 )
             if rotation_angle <= 0.05:
                 raise RuntimeError(
-                    f"Positive-yaw teleop did not rotate enough: {rotation_angle}"
+                    f"Positive wrist-roll did not rotate enough: {rotation_angle}"
+                )
+            if env.joint_positions[4] <= joint_start[4] + 0.01:
+                raise RuntimeError("Wrist-roll joint did not move")
+            changed_joint_targets = np.flatnonzero(
+                np.abs(env.data.ctrl[:5] - target_start[:5]) > 0.01
+            )
+            if changed_joint_targets.tolist() != [4]:
+                raise RuntimeError(
+                    "Wrist-roll command targeted joints other than wrist_roll: "
+                    f"{changed_joint_targets.tolist()}"
                 )
             recorder.stop_episode(save=True)
             dataset_path = recorder.finalize()
@@ -76,7 +91,7 @@ def main() -> None:
                     "actuators": env.model.nu,
                     "cameras": env.model.ncam,
                     "positive_x_displacement_m": translation_x,
-                    "positive_yaw_rotation_rad": rotation_angle,
+                    "positive_wrist_roll_rotation_rad": rotation_angle,
                 },
                 "dataset": {
                     "format": dataset["codebase_version"],

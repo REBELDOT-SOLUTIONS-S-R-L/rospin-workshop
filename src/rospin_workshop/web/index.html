@@ -144,7 +144,7 @@
       <div class="mark">R</div>
       <div>
         <h1>ROSpin · SO-101 Workshop</h1>
-        <div class="subtitle">MuJoCo simulation · Cartesian teleoperation · LeRobot v3</div>
+        <div class="subtitle">MuJoCo simulation · Cartesian + joint teleoperation · LeRobot v3</div>
       </div>
     </div>
     <div class="connection"><span id="connectionDot" class="dot"></span><span id="connectionText">Connecting</span></div>
@@ -169,10 +169,10 @@
           <div class="key-row"><kbd data-key="q">Q</kbd><kbd data-key="e">E</kbd><span>+Z / −Z</span></div>
         </div>
         <div>
-          <h2>EEF rotation · world axes</h2>
-          <div class="key-row"><kbd data-key="i">I</kbd><kbd data-key="k">K</kbd><span>roll +X / −X</span></div>
-          <div class="key-row"><kbd data-key="j">J</kbd><kbd data-key="l">L</kbd><span>pitch +Y / −Y</span></div>
-          <div class="key-row"><kbd data-key="u">U</kbd><kbd data-key="o">O</kbd><span>yaw +Z / −Z</span></div>
+          <h2>Direct joint rotation</h2>
+          <div class="key-row"><kbd data-key="i">I</kbd><kbd data-key="k">K</kbd><span>wrist flex + / −</span></div>
+          <div class="key-row"><kbd data-key="j">J</kbd><kbd data-key="l">L</kbd><span>wrist roll + / −</span></div>
+          <div class="key-row"><kbd data-key="u">U</kbd><kbd data-key="o">O</kbd><span>shoulder pan + / −</span></div>
         </div>
         <div>
           <h2>Gripper</h2>
@@ -264,6 +264,10 @@
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
     }
 
+    function showKeyState(key, active) {
+      document.querySelector(`kbd[data-key="${CSS.escape(key)}"]`)?.classList.toggle("active", active);
+    }
+
     function command(name) {
       send({
         type: "command",
@@ -304,6 +308,7 @@
       event.preventDefault();
       if (pressed.has(key)) return;
       pressed.add(key);
+      showKeyState(key, true);
       send({type: "key", key, pressed: true});
     });
     window.addEventListener("keyup", event => {
@@ -311,10 +316,12 @@
       if (!movementKeys.has(key)) return;
       event.preventDefault();
       pressed.delete(key);
+      showKeyState(key, false);
       send({type: "key", key, pressed: false});
     });
     window.addEventListener("blur", () => {
       pressed.clear();
+      document.querySelectorAll("kbd[data-key]").forEach(key => key.classList.remove("active"));
       send({type: "clear_keys"});
     });
     teleopPanel.addEventListener("click", focusTeleop);

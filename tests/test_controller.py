@@ -30,15 +30,19 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
         assert controller.status()["sim_time"] >= 0.2
         assert controller.status()["camera_hz"] == 5
 
-        start_quaternion = np.asarray(controller.status()["eef_orientation"])
-        controller.set_key("u", True)
+        time.sleep(0.1)
+        start_joints = np.asarray(controller.status()["joint_positions"])
+        start_targets = np.asarray(controller.status()["joint_targets"])
+        controller.set_key("j", True)
         time.sleep(0.25)
-        controller.set_key("u", False)
-        end_quaternion = np.asarray(controller.status()["eef_orientation"])
-        rotation_angle = 2 * np.arccos(
-            np.clip(abs(np.dot(start_quaternion, end_quaternion)), 0.0, 1.0)
+        active_targets = np.asarray(controller.status()["joint_targets"])
+        controller.set_key("j", False)
+        end_joints = np.asarray(controller.status()["joint_positions"])
+        assert end_joints[4] > start_joints[4] + 0.01
+        target_changes = np.flatnonzero(
+            np.abs(active_targets[:5] - start_targets[:5]) > 0.01
         )
-        assert rotation_angle > 0.01
+        assert target_changes.tolist() == [4]
 
         controller.command(
             "start_recording",
