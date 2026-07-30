@@ -203,8 +203,8 @@ and mesh poses. The verifier compiles the original URDF with MuJoCo's native
 importer and compares all link and visual transforms at three joint poses.
 The new URDF has no camera, so the wrist camera starts from the supplied camera
 USD orientation. Its final pose and 62° vertical field of view were calibrated
-against the physical `/dev/video2` MJPEG feed at 1280×720: both jaw tips align
-in the lower center of the 16:9 simulated view.
+against the physical `/dev/video2` MJPEG feed at 1280×720: the jaw midpoint
+aligns at the same slightly left-of-center position in the 16:9 simulated view.
 
 To verify source/model synchronization:
 
