@@ -16,9 +16,13 @@
   },
   "wrist_camera": {
     "source_position": [-0.0027655846379346927, 0.07826035963440182, -0.00028761635379243033],
-    "mounted_position": [0.0772184114, 0.0784983244, 0.0012947076],
+    "mounted_position": [0.03, 0.1, -0.0002876164],
     "source_orientation_wxyz": [0.9517752156984511, -0.30663319134833134, -0.009869642655230732, -0.0016170651076814983],
-    "side_mount_clearance_m": 0.08
+    "vertical_fov_degrees": 62.0,
+    "physical_reference_device": "/dev/video2",
+    "physical_reference_format": "mjpeg",
+    "physical_reference_resolution": [1280, 720],
+    "simulation_resolution": [480, 270]
   },
   "robot": {
     "joints": [

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from rospin_workshop.config import RuntimeConfig
-from rospin_workshop.controller import WorkshopController
+from rospin_workshop.controller import KEY_ACTIONS, WorkshopController
 from rospin_workshop.dataset_tools import inspect_dataset
 
 
@@ -22,13 +22,19 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
     )
     controller.start()
     try:
-        start_x = controller.status()["eef_position"][0]
+        start_y = controller.status()["eef_position"][1]
         controller.set_key("w", True)
         time.sleep(0.5)
         controller.set_key("w", False)
-        assert controller.status()["eef_position"][0] > start_x + 0.005
+        assert controller.status()["eef_position"][1] > start_y + 0.005
         assert controller.status()["sim_time"] >= 0.2
         assert controller.status()["camera_hz"] == 5
+
+        start_x = controller.status()["eef_position"][0]
+        controller.set_key("a", True)
+        time.sleep(0.5)
+        controller.set_key("a", False)
+        assert controller.status()["eef_position"][0] > start_x + 0.005
 
         time.sleep(0.1)
         start_joints = np.asarray(controller.status()["joint_positions"])
@@ -43,6 +49,22 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
             np.abs(active_targets[:5] - start_targets[:5]) > 0.01
         )
         assert target_changes.tolist() == [4]
+
+        gripper_start = controller.status()["joint_positions"][5]
+        controller.set_key("[", True)
+        controller.set_key("[", False)
+        time.sleep(0.6)
+        closed = controller.status()
+        gripper_range = controller.env.model.jnt_range[controller.env._joint_ids[-1]]
+        assert np.isclose(closed["joint_targets"][5], gripper_range[0], atol=1e-4)
+        assert closed["joint_positions"][5] < gripper_start - 0.2
+
+        controller.set_key("]", True)
+        controller.set_key("]", False)
+        time.sleep(0.6)
+        opened = controller.status()
+        assert np.isclose(opened["joint_targets"][5], gripper_range[1], atol=1e-4)
+        assert opened["joint_positions"][5] > closed["joint_positions"][5] + 0.2
 
         controller.command(
             "start_recording",
@@ -73,3 +95,26 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
         "observation.images.wrist": [3, 72, 96],
         "observation.images.perspective": [3, 72, 96],
     }
+
+
+def test_keyboard_mapping_and_gripper_command_latching(tmp_path) -> None:
+    np.testing.assert_array_equal(
+        KEY_ACTIONS["w"], np.array([0, 1, 0, 0, 0, 0, 0], dtype=np.float32)
+    )
+    np.testing.assert_array_equal(
+        KEY_ACTIONS["s"], np.array([0, -1, 0, 0, 0, 0, 0], dtype=np.float32)
+    )
+    np.testing.assert_array_equal(
+        KEY_ACTIONS["a"], np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
+    )
+    np.testing.assert_array_equal(
+        KEY_ACTIONS["d"], np.array([-1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
+    )
+
+    controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
+    controller.set_key("[", True)
+    controller.set_key("[", False)
+    assert controller._current_action()[6] == -1
+    controller.set_key("]", True)
+    controller.set_key("]", False)
+    assert controller._current_action()[6] == 1

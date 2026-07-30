@@ -320,6 +320,17 @@ def verify() -> dict:
         np.fromstring(wrist_camera.attrib["quat"], sep=" "),
         manifest["wrist_camera"]["source_orientation_wxyz"],
     )
+    if not np.isclose(
+        float(wrist_camera.attrib["fovy"]),
+        manifest["wrist_camera"]["vertical_fov_degrees"],
+    ):
+        raise AssertionError("Wrist camera FOV does not match its calibration")
+    physical_resolution = manifest["wrist_camera"]["physical_reference_resolution"]
+    simulation_resolution = manifest["wrist_camera"]["simulation_resolution"]
+    if physical_resolution[0] * simulation_resolution[1] != (
+        simulation_resolution[0] * physical_resolution[1]
+    ):
+        raise AssertionError("Physical and simulated wrist-camera aspects differ")
     return {
         "scene": str(DEFAULT_SCENE),
         "robot_urdf": str(urdf_path),

@@ -46,17 +46,17 @@ dataset or task field, click the highlighted control panel again, then hold:
 
 | Keys | Command |
 |---|---|
-| `W` / `S` | end effector +X / −X |
-| `A` / `D` | end effector +Y / −Y |
+| `W` / `S` | end effector +Y / −Y |
+| `A` / `D` | end effector +X / −X |
 | `Q` / `E` | end effector +Z / −Z |
 | `I` / `K` | wrist flex + / − |
 | `J` / `L` | wrist roll + / − |
 | `U` / `O` | shoulder pan + / − |
-| `[` / `]` | close / open gripper |
+| `[` / `]` | close fully / open fully |
 
 The Gymnasium action is
 `[eef_dx, eef_dy, eef_dz, shoulder_pan_delta, wrist_flex_delta,`
-`wrist_roll_delta, gripper_delta]` in `[-1, 1]`. Damped least-squares IK maps
+`wrist_roll_delta, gripper_command]` in `[-1, 1]`. Damped least-squares IK maps
 only the world-frame translation command to the five arm joints. Rotation
 buttons address the named joint directly, so a wrist-roll command cannot be
 redistributed across the whole arm. This follows LeIsaac's separation of
@@ -64,10 +64,13 @@ Cartesian IK and direct SO-101 joint control while retaining the requested
 three-axis Cartesian translation keys.
 
 The robot mount faces 90 degrees toward world −Y, into the usable half of the
-table. The perspective camera is behind it on the +Y side. Full-scale held keys
-command at most 12 cm/s translation or 0.8 rad/s joint motion, independent of
-the configured control rate. Releasing all keys synchronizes position targets
-to the current pose so the robot stops instead of finishing a queued motion.
+table. The perspective camera is centered directly behind it on the +Y side,
+elevated and aimed down at the workspace. Full-scale held keys command at most
+12 cm/s translation or 0.8 rad/s joint motion, independent of the configured
+control rate. Releasing all arm-control keys synchronizes position targets to
+the current pose so the robot stops instead of finishing a queued motion.
+Gripper commands are absolute and latched: one press targets the corresponding
+joint limit and release does not interrupt the full open/close motion.
 
 ## Record a local LeRobot v3 dataset
 
@@ -198,9 +201,10 @@ URDF `rpy` values are extrinsic rotations, so the MJCF compiler deliberately
 uses uppercase `XYZ`; lowercase `xyz` is intrinsic and produces incorrect link
 and mesh poses. The verifier compiles the original URDF with MuJoCo's native
 importer and compares all link and visual transforms at three joint poses.
-The new URDF has no camera, so the wrist camera retains the orientation from
-the supplied camera USD and uses an 8 cm side bracket to keep its lens clear of
-the real gripper mesh.
+The new URDF has no camera, so the wrist camera starts from the supplied camera
+USD orientation. Its final pose and 62° vertical field of view were calibrated
+against the physical `/dev/video2` MJPEG feed at 1280×720: both jaw tips align
+in the lower center of the 16:9 simulated view.
 
 To verify source/model synchronization:
 
@@ -222,8 +226,8 @@ Set environment variables in `compose.yaml`:
 |---|---:|---|
 | `ROSPIN_CONTROL_HZ` | `60` | simulation physics and keyboard command rate |
 | `ROSPIN_CAMERA_HZ` | `15` | browser camera and dataset recording FPS |
-| `ROSPIN_IMAGE_WIDTH` | `320` | both camera widths |
-| `ROSPIN_IMAGE_HEIGHT` | `240` | both camera heights |
+| `ROSPIN_IMAGE_WIDTH` | `480` | both camera widths; default is 16:9 |
+| `ROSPIN_IMAGE_HEIGHT` | `270` | both camera heights; default is 16:9 |
 | `ROSPIN_DATA_ROOT` | `/workspace/data` | datasets and training outputs |
 | `ROSPIN_SO101_ASSET_DIR` | auto-detected | vendored SO-101 URDF directory |
 | `MUJOCO_GL` | `osmesa` | CPU headless OpenGL backend |

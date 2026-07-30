@@ -74,6 +74,30 @@ def main() -> None:
                     "Wrist-roll command targeted joints other than wrist_roll: "
                     f"{changed_joint_targets.tolist()}"
                 )
+            gripper_range = env.model.jnt_range[env._joint_ids[-1]]
+            close_gripper = np.zeros(7, dtype=np.float32)
+            close_gripper[6] = -1
+            env.step_dynamics(close_gripper)
+            for _ in range(40):
+                env.step_dynamics(np.zeros(7, dtype=np.float32))
+            closed_gripper_position = float(env.joint_positions[-1])
+            if closed_gripper_position > gripper_range[0] + 0.05:
+                raise RuntimeError(
+                    "Gripper did not reach its closed joint limit: "
+                    f"{closed_gripper_position}"
+                )
+
+            open_gripper = np.zeros(7, dtype=np.float32)
+            open_gripper[6] = 1
+            env.step_dynamics(open_gripper)
+            for _ in range(60):
+                env.step_dynamics(np.zeros(7, dtype=np.float32))
+            opened_gripper_position = float(env.joint_positions[-1])
+            if opened_gripper_position < gripper_range[1] - 0.05:
+                raise RuntimeError(
+                    "Gripper did not reach its open joint limit: "
+                    f"{opened_gripper_position}"
+                )
             recorder.stop_episode(save=True)
             dataset_path = recorder.finalize()
             dataset = inspect_dataset(dataset_path)
@@ -92,6 +116,8 @@ def main() -> None:
                     "cameras": env.model.ncam,
                     "positive_x_displacement_m": translation_x,
                     "positive_wrist_roll_rotation_rad": rotation_angle,
+                    "closed_gripper_position_rad": closed_gripper_position,
+                    "opened_gripper_position_rad": opened_gripper_position,
                 },
                 "dataset": {
                     "format": dataset["codebase_version"],

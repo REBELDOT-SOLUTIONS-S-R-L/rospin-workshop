@@ -17,10 +17,10 @@ from rospin_workshop.recorder import LeRobotV3Recorder
 LOGGER = logging.getLogger(__name__)
 
 KEY_ACTIONS: dict[str, np.ndarray] = {
-    "w": np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32),
-    "s": np.array([-1, 0, 0, 0, 0, 0, 0], dtype=np.float32),
-    "a": np.array([0, 1, 0, 0, 0, 0, 0], dtype=np.float32),
-    "d": np.array([0, -1, 0, 0, 0, 0, 0], dtype=np.float32),
+    "w": np.array([0, 1, 0, 0, 0, 0, 0], dtype=np.float32),
+    "s": np.array([0, -1, 0, 0, 0, 0, 0], dtype=np.float32),
+    "a": np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    "d": np.array([-1, 0, 0, 0, 0, 0, 0], dtype=np.float32),
     "q": np.array([0, 0, 1, 0, 0, 0, 0], dtype=np.float32),
     "e": np.array([0, 0, -1, 0, 0, 0, 0], dtype=np.float32),
     "i": np.array([0, 0, 0, 0, 1, 0, 0], dtype=np.float32),
@@ -48,6 +48,7 @@ class WorkshopController:
         self._observation: dict[str, np.ndarray] | None = None
         self._jpeg_frames: dict[str, bytes] = {}
         self._keys: set[str] = set()
+        self._gripper_command = 0.0
         self._recorder: LeRobotV3Recorder | None = None
         self._last_dataset_path: Path | None = None
         self._message = "Ready"
@@ -133,6 +134,10 @@ class WorkshopController:
         with self._lock:
             if pressed:
                 self._keys.add(key)
+                if key == "[":
+                    self._gripper_command = -1.0
+                elif key == "]":
+                    self._gripper_command = 1.0
             else:
                 self._keys.discard(key)
             self._status_cache = {
@@ -151,8 +156,10 @@ class WorkshopController:
         action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
         with self._lock:
             keys = tuple(self._keys)
+            gripper_command = self._gripper_command
         for key in keys:
             action += KEY_ACTIONS[key]
+        action[6] = gripper_command
         return np.clip(action, -1.0, 1.0)
 
     @staticmethod
@@ -402,6 +409,7 @@ class WorkshopController:
                     raise RuntimeError("Stop or discard the recording before reset")
                 with self._lock:
                     self._keys.clear()
+                    self._gripper_command = 0.0
                 self._observation, _ = self.env.reset()
                 self._render_epoch += 1
                 self._render_requested.set()

@@ -16,8 +16,8 @@ class RuntimeConfig:
     port: int = _int_env("ROSPIN_PORT", 8000)
     control_hz: int = _int_env("ROSPIN_CONTROL_HZ", 60)
     camera_hz: int = _int_env("ROSPIN_CAMERA_HZ", 15)
-    image_width: int = _int_env("ROSPIN_IMAGE_WIDTH", 320)
-    image_height: int = _int_env("ROSPIN_IMAGE_HEIGHT", 240)
+    image_width: int = _int_env("ROSPIN_IMAGE_WIDTH", 480)
+    image_height: int = _int_env("ROSPIN_IMAGE_HEIGHT", 270)
 
     @property
     def datasets_root(self) -> Path:

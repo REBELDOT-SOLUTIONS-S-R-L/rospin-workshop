@@ -28,7 +28,7 @@ ACTION_NAMES = (
     "shoulder_pan_delta",
     "wrist_flex_delta",
     "wrist_roll_delta",
-    "gripper_delta",
+    "gripper_command",
 )
 
 
@@ -55,8 +55,9 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
     Actions are normalized deltas
     ``[dx, dy, dz, shoulder_pan, wrist_flex, wrist_roll, gripper]`` in
     ``[-1, 1]``. World-frame EEF translation uses damped least-squares
-    differential IK. Rotation controls address real joints directly so a wrist
-    command cannot be redistributed across the entire arm.
+    differential IK. Rotation controls address real joints directly. The final
+    element is a latched absolute gripper command: negative closes fully,
+    positive opens fully, and zero retains the existing target.
     """
 
     metadata: ClassVar[dict[str, Any]] = {
@@ -74,7 +75,6 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         control_hz: int = 60,
         translation_speed: float = 0.12,
         joint_speed: float = 0.8,
-        gripper_speed: float = 0.8,
         ik_damping: float = 0.04,
         max_joint_step: float = 0.10,
     ) -> None:
@@ -90,7 +90,6 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self.control_hz = control_hz
         self.translation_step = translation_speed / control_hz
         self.joint_step = joint_speed / control_hz
-        self.gripper_step = gripper_speed / control_hz
         self.ik_damping = ik_damping
         self.max_joint_step = max_joint_step
 
@@ -267,8 +266,8 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             # letting a queued position target continue moving it. Latch only
             # on the active-to-idle transition; repeatedly following qpos would
             # let gravity walk the idle robot downward.
-            if np.any(self._previous_action):
-                self.data.ctrl[:] = self.joint_positions
+            if np.any(self._previous_action[:6]):
+                self.data.ctrl[:-1] = self.joint_positions[:-1]
             self._previous_action = action.copy()
             return
 
@@ -300,13 +299,10 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self.data.ctrl[:-1] = np.clip(arm_targets, arm_ranges[:, 0], arm_ranges[:, 1])
 
         gripper_range = self.model.jnt_range[self._joint_ids[-1]]
-        if self._previous_action[6] and not action[6]:
-            self.data.ctrl[-1] = self.joint_positions[-1]
-        self.data.ctrl[-1] = np.clip(
-            self.data.ctrl[-1] + action[6] * self.gripper_step,
-            gripper_range[0],
-            gripper_range[1],
-        )
+        if action[6] < 0:
+            self.data.ctrl[-1] = gripper_range[0]
+        elif action[6] > 0:
+            self.data.ctrl[-1] = gripper_range[1]
         self._previous_action = action.copy()
 
     def step_dynamics(

@@ -103,7 +103,19 @@ def test_compiled_link_and_mesh_poses_match_mujoco_urdf_importer() -> None:
     perspective_id = mujoco.mj_name2id(
         workshop_model, mujoco.mjtObj.mjOBJ_CAMERA, "perspective"
     )
-    assert workshop_model.cam_pos[perspective_id, 1] > 0.23
+    np.testing.assert_allclose(
+        workshop_model.cam_pos[perspective_id],
+        [0.0, 0.72, 1.22],
+    )
+    perspective_rotation = np.empty(9)
+    mujoco.mju_quat2Mat(
+        perspective_rotation,
+        workshop_model.cam_quat[perspective_id],
+    )
+    perspective_forward = -perspective_rotation.reshape(3, 3)[:, 2]
+    assert abs(perspective_forward[0]) < 1e-8
+    assert perspective_forward[1] < 0
+    assert perspective_forward[2] < 0
 
     for native_body_id in range(1, native_model.nbody):
         body_name = mujoco.mj_id2name(

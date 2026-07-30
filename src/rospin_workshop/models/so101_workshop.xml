@@ -77,9 +77,10 @@
            dir="0.707107 0 -0.707107" diffuse="0.55 0.55 0.55"
            castshadow="false"/>
 
-    <!-- Rear three-quarter view: the arm faces -Y, so +Y is behind it. -->
-    <camera name="perspective" pos="0.24 0.86 1.15"
-            xyaxes="-0.96551 0.26036 0 -0.07814 -0.28975 0.95391"
+    <!-- Third-person camera centered directly behind the -Y-facing arm,
+         elevated and pitched down toward its tabletop workspace. -->
+    <camera name="perspective" pos="0 0.72 1.22"
+            xyaxes="-1 0 0 0 -0.43796942 0.89898987"
             fovy="48"/>
 
     <!-- Mount the URDF base toward the back edge and face it 90 degrees
@@ -169,10 +170,10 @@
                 <geom class="collision" type="capsule"
                       fromto="0 0 0 -0.0079 -0.000218121 -0.0981274" size="0.024"/>
 
-                <!-- Keep the supplied USD camera orientation and use the same
-                     8 cm side-mount clearance as the workshop camera bracket. -->
+                <!-- Calibrated against the 1280x720 /dev/video2 feed: both jaw
+                     tips occupy the same centered lower-frame position. -->
                 <camera name="wrist"
-                        pos="0.0772184114 0.0784983244 0.0012947076"
+                        pos="0.03 0.1 -0.0002876164"
                         quat="0.9517752157 -0.3066331913 -0.0098696427 -0.0016170651"
                         fovy="62"/>
 

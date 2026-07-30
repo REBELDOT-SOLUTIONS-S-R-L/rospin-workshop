@@ -78,7 +78,7 @@
     }
     .live { color: var(--cyan); font-size: 10px; }
     .camera {
-      display: block; width: 100%; aspect-ratio: 4 / 3;
+      display: block; width: 100%; aspect-ratio: 16 / 9;
       background: #06090d; object-fit: cover;
     }
     .teleop {
@@ -157,15 +157,15 @@
         <img class="camera" src="/camera/perspective.mjpg" alt="Perspective camera">
       </article>
       <article class="card">
-        <div class="camera-title"><span>Wrist camera</span><span class="live">● live</span></div>
-        <img class="camera" src="/camera/wrist.mjpg" alt="Wrist camera">
+        <div class="camera-title"><span>Gripper camera</span><span class="live">● live</span></div>
+        <img class="camera" src="/camera/wrist.mjpg" alt="Gripper camera">
       </article>
       <article id="teleopPanel" class="card teleop" tabindex="0"
                aria-label="Keyboard teleoperation controls">
         <div>
           <h2>End-effector translation</h2>
-          <div class="key-row"><kbd data-key="w">W</kbd><kbd data-key="s">S</kbd><span>+X / −X</span></div>
-          <div class="key-row"><kbd data-key="a">A</kbd><kbd data-key="d">D</kbd><span>+Y / −Y</span></div>
+          <div class="key-row"><kbd data-key="w">W</kbd><kbd data-key="s">S</kbd><span>+Y / −Y</span></div>
+          <div class="key-row"><kbd data-key="a">A</kbd><kbd data-key="d">D</kbd><span>+X / −X</span></div>
           <div class="key-row"><kbd data-key="q">Q</kbd><kbd data-key="e">E</kbd><span>+Z / −Z</span></div>
         </div>
         <div>
@@ -176,8 +176,8 @@
         </div>
         <div>
           <h2>Gripper</h2>
-          <div class="key-row"><kbd data-key="[">[</kbd><span>close</span></div>
-          <div class="key-row"><kbd data-key="]">]</kbd><span>open</span></div>
+          <div class="key-row"><kbd data-key="[">[</kbd><span>close fully</span></div>
+          <div class="key-row"><kbd data-key="]">]</kbd><span>open fully</span></div>
           <div id="keyboardHint" class="hint">Keyboard control ready. Click this panel after editing text. Multiple movement keys may be held together.</div>
         </div>
       </article>

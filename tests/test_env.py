@@ -102,6 +102,31 @@ def test_idle_controller_holds_the_latched_pose() -> None:
         env.close()
 
 
+def test_gripper_commands_latch_full_joint_travel() -> None:
+    env = SO101WorkshopEnv(render_mode=None, control_hz=60)
+    try:
+        env.reset()
+        gripper_range = env.model.jnt_range[env._joint_ids[-1]]
+        close = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+        close[6] = -1
+        env.step_dynamics(close)
+        assert env.data.ctrl[-1] == gripper_range[0]
+        idle = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+        for _ in range(90):
+            env.step_dynamics(idle)
+        assert env.joint_positions[-1] < gripper_range[0] + 0.05
+
+        open_gripper = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+        open_gripper[6] = 1
+        env.step_dynamics(open_gripper)
+        assert env.data.ctrl[-1] == gripper_range[1]
+        for _ in range(120):
+            env.step_dynamics(idle)
+        assert env.joint_positions[-1] > gripper_range[1] - 0.05
+    finally:
+        env.close()
+
+
 def test_gymnasium_checker() -> None:
     env = SO101WorkshopEnv(image_width=64, image_height=48)
     try:
