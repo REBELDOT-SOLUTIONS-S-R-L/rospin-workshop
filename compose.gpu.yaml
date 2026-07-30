@@ -1,0 +1,10 @@
+services:
+  workshop:
+    image: rospin-so101-workshop:cuda
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    gpus: all
+    environment:
+      MUJOCO_GL: egl
+

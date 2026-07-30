@@ -1,0 +1,65 @@
+name: Docker image
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke-test:
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build image and run packaged self-check
+        run: docker build --pull --tag "rospin-workshop:ci-${{ matrix.arch }}" .
+
+      - name: Start workshop and verify HTTP runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_name="rospin-ci-${{ matrix.arch }}"
+          docker run \
+            --name "$container_name" \
+            --rm \
+            --detach \
+            --publish 8000:8000 \
+            "rospin-workshop:ci-${{ matrix.arch }}"
+          trap 'docker stop "$container_name"' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/api/status >status.json; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs "$container_name"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          python3 - <<'PY'
+          import json
+
+          with open("status.json", encoding="utf-8") as status_file:
+              status = json.load(status_file)
+          assert status["error"] is None, status
+          assert status["image_size"] == [320, 240], status
+          assert len(status["joint_positions"]) == 6, status
+          print(json.dumps(status, indent=2))
+          PY
+

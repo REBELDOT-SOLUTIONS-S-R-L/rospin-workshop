@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ROSpin · SO-101 Workshop</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090d14;
+      --panel: #111925;
+      --line: #263447;
+      --muted: #92a4ba;
+      --text: #eef5ff;
+      --blue: #4da3ff;
+      --cyan: #4de1d1;
+      --red: #ff637d;
+      --green: #67e89b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 75% -15%, #17355d 0, transparent 35rem),
+        radial-gradient(circle at -10% 80%, #123936 0, transparent 32rem),
+        var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 22px clamp(20px, 4vw, 54px);
+      border-bottom: 1px solid #1d2a3a;
+      background: #090d14cc;
+      backdrop-filter: blur(16px);
+    }
+    .brand { display: flex; align-items: center; gap: 13px; }
+    .mark {
+      width: 38px; height: 38px; border-radius: 11px;
+      display: grid; place-items: center;
+      background: linear-gradient(140deg, var(--blue), var(--cyan));
+      color: #06111d; font-weight: 900; letter-spacing: -1px;
+      box-shadow: 0 8px 30px #4da3ff40;
+    }
+    h1 { margin: 0; font-size: 17px; letter-spacing: .02em; }
+    .subtitle { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .connection { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); box-shadow: 0 0 12px currentColor; }
+    .dot.online { background: var(--green); }
+    main {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 24px clamp(18px, 4vw, 54px) 44px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      gap: 22px;
+    }
+    .views {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      align-content: start;
+    }
+    .card {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: linear-gradient(160deg, #141f2e, var(--panel));
+      box-shadow: 0 20px 65px #0008;
+    }
+    .camera-title {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 13px 15px;
+      color: #c9d8e9; font-size: 12px; text-transform: uppercase; letter-spacing: .12em;
+    }
+    .live { color: var(--cyan); font-size: 10px; }
+    .camera {
+      display: block; width: 100%; aspect-ratio: 4 / 3;
+      background: #06090d; object-fit: cover;
+    }
+    .teleop {
+      grid-column: 1 / -1;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      outline: none;
+    }
+    .teleop:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px #4de1d122, 0 20px 65px #0008;
+    }
+    .teleop h2, aside h2 { margin: 0 0 13px; font-size: 13px; text-transform: uppercase; letter-spacing: .1em; }
+    .keys { display: flex; flex-wrap: wrap; gap: 8px; }
+    kbd {
+      min-width: 39px; padding: 8px 9px; border-radius: 8px;
+      border: 1px solid #3a4b62; border-bottom-width: 3px;
+      background: #172232; color: #fff; text-align: center; font: 700 13px ui-monospace, monospace;
+    }
+    kbd.active { border-color: var(--cyan); background: #164a4a; box-shadow: 0 0 16px #4de1d144; }
+    .key-row { display: flex; align-items: center; gap: 9px; margin: 8px 0; color: var(--muted); font-size: 12px; }
+    aside { display: flex; flex-direction: column; gap: 18px; }
+    .side-content { padding: 18px; }
+    label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; margin: 13px 0 7px; }
+    input {
+      width: 100%; border: 1px solid #34455c; border-radius: 9px;
+      color: var(--text); background: #0b111b; padding: 10px 11px; outline: none;
+    }
+    input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #4da3ff22; }
+    .button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 16px; }
+    button {
+      border: 1px solid #3c4f68; border-radius: 9px; padding: 10px 8px;
+      color: var(--text); background: #1a2738; cursor: pointer; font-weight: 700;
+    }
+    button:hover { border-color: var(--blue); background: #20344d; }
+    button.primary { border-color: #2288ed; background: #146bbd; }
+    button.danger { color: #ffb3bf; border-color: #7e3543; background: #311821; }
+    button:disabled { opacity: .38; cursor: not-allowed; }
+    .status-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .badge { padding: 5px 8px; border-radius: 999px; background: #1a2738; color: var(--muted); font-size: 11px; }
+    .badge.recording { color: #ffdbe1; background: #752538; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 50% { box-shadow: 0 0 0 6px #ff637d16; } }
+    .message { color: #c3d1e1; font-size: 13px; line-height: 1.5; margin: 13px 0 0; overflow-wrap: anywhere; }
+    .message.error { color: #ff8fa1; }
+    dl { margin: 15px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; font-size: 12px; }
+    dt { color: var(--muted); } dd { margin: 0; text-align: right; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+    .hint { color: var(--muted); font-size: 11px; line-height: 1.55; margin-top: 12px; }
+    @media (max-width: 1050px) {
+      main { grid-template-columns: 1fr; }
+      aside { display: grid; grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 720px) {
+      .views, aside, .teleop { grid-template-columns: 1fr; }
+      .teleop { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="mark">R</div>
+      <div>
+        <h1>ROSpin · SO-101 Workshop</h1>
+        <div class="subtitle">MuJoCo simulation · Cartesian teleoperation · LeRobot v3</div>
+      </div>
+    </div>
+    <div class="connection"><span id="connectionDot" class="dot"></span><span id="connectionText">Connecting</span></div>
+  </header>
+
+  <main>
+    <section class="views">
+      <article class="card">
+        <div class="camera-title"><span>Perspective</span><span class="live">● live</span></div>
+        <img class="camera" src="/camera/perspective.mjpg" alt="Perspective camera">
+      </article>
+      <article class="card">
+        <div class="camera-title"><span>Wrist camera</span><span class="live">● live</span></div>
+        <img class="camera" src="/camera/wrist.mjpg" alt="Wrist camera">
+      </article>
+      <article id="teleopPanel" class="card teleop" tabindex="0"
+               aria-label="Keyboard teleoperation controls">
+        <div>
+          <h2>End-effector translation</h2>
+          <div class="key-row"><kbd data-key="w">W</kbd><kbd data-key="s">S</kbd><span>+X / −X</span></div>
+          <div class="key-row"><kbd data-key="a">A</kbd><kbd data-key="d">D</kbd><span>+Y / −Y</span></div>
+          <div class="key-row"><kbd data-key="q">Q</kbd><kbd data-key="e">E</kbd><span>+Z / −Z</span></div>
+        </div>
+        <div>
+          <h2>EEF rotation · world axes</h2>
+          <div class="key-row"><kbd data-key="i">I</kbd><kbd data-key="k">K</kbd><span>roll +X / −X</span></div>
+          <div class="key-row"><kbd data-key="j">J</kbd><kbd data-key="l">L</kbd><span>pitch +Y / −Y</span></div>
+          <div class="key-row"><kbd data-key="u">U</kbd><kbd data-key="o">O</kbd><span>yaw +Z / −Z</span></div>
+        </div>
+        <div>
+          <h2>Gripper</h2>
+          <div class="key-row"><kbd data-key="[">[</kbd><span>close</span></div>
+          <div class="key-row"><kbd data-key="]">]</kbd><span>open</span></div>
+          <div id="keyboardHint" class="hint">Keyboard control ready. Click this panel after editing text. Multiple movement keys may be held together.</div>
+        </div>
+      </article>
+    </section>
+
+    <aside>
+      <section class="card side-content">
+        <h2>Local recording</h2>
+        <label for="datasetName">Dataset name</label>
+        <input id="datasetName" value="so101_workshop" maxlength="64">
+        <label for="taskName">Task description</label>
+        <input id="taskName" value="unspecified manipulation task" maxlength="160">
+        <div class="button-grid">
+          <button id="startButton" class="primary">Start episode</button>
+          <button id="stopButton">Save episode</button>
+          <button id="discardButton" class="danger">Discard</button>
+          <button id="finishButton">Finish dataset</button>
+        </div>
+        <div class="hint">“Save episode” keeps the dataset open. “Finish dataset” flushes its v3 Parquet and video writers so it is ready for training.</div>
+      </section>
+
+      <section class="card side-content">
+        <div class="status-line">
+          <h2 style="margin:0">Session status</h2>
+          <span id="recordingBadge" class="badge">idle</span>
+        </div>
+        <p id="message" class="message">Waiting for simulation…</p>
+        <dl>
+          <dt>Episode frames</dt><dd id="frames">0</dd>
+          <dt>Saved episodes</dt><dd id="episodes">0</dd>
+          <dt>EEF xyz</dt><dd id="eef">—</dd>
+          <dt>EEF quat wxyz</dt><dd id="eefQuat">—</dd>
+          <dt>Dataset</dt><dd id="datasetPath">not created</dd>
+        </dl>
+        <div class="button-grid">
+          <button id="resetButton">Reset simulation</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    const movementKeys = new Set([
+      "w", "s", "a", "d", "q", "e",
+      "i", "k", "j", "l", "u", "o",
+      "[", "]"
+    ]);
+    const pressed = new Set();
+    const teleopPanel = document.querySelector("#teleopPanel");
+    const keyboardHint = document.querySelector("#keyboardHint");
+    let socket;
+    let status = {};
+
+    function focusTeleop() {
+      teleopPanel.focus({preventScroll: true});
+      keyboardHint.textContent = "Keyboard control ready. Multiple movement keys may be held together.";
+    }
+
+    function connect() {
+      const scheme = location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(`${scheme}://${location.host}/ws`);
+      socket.onopen = () => {
+        document.querySelector("#connectionDot").classList.add("online");
+        document.querySelector("#connectionText").textContent = "Connected";
+        if (document.activeElement === document.body) focusTeleop();
+      };
+      socket.onclose = () => {
+        document.querySelector("#connectionDot").classList.remove("online");
+        document.querySelector("#connectionText").textContent = "Reconnecting";
+        pressed.clear();
+        setTimeout(connect, 1000);
+      };
+      socket.onmessage = event => {
+        const message = JSON.parse(event.data);
+        if (message.type === "status") updateStatus(message.data);
+        if (message.type === "error") {
+          document.querySelector("#message").textContent = message.message;
+          document.querySelector("#message").classList.add("error");
+        }
+      };
+    }
+
+    function send(message) {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    }
+
+    function command(name) {
+      send({
+        type: "command",
+        command: name,
+        payload: {
+          dataset_name: document.querySelector("#datasetName").value,
+          task: document.querySelector("#taskName").value,
+        }
+      });
+    }
+
+    function updateStatus(next) {
+      status = next;
+      const badge = document.querySelector("#recordingBadge");
+      badge.textContent = next.recording ? "● recording" : (next.finalized ? "finalized" : "idle");
+      badge.classList.toggle("recording", next.recording);
+      const message = document.querySelector("#message");
+      message.textContent = next.error || next.message;
+      message.classList.toggle("error", Boolean(next.error));
+      document.querySelector("#frames").textContent = next.frames_in_episode;
+      document.querySelector("#episodes").textContent = next.episodes;
+      document.querySelector("#eef").textContent = next.eef_position?.map(v => v.toFixed(3)).join(", ") || "—";
+      document.querySelector("#eefQuat").textContent = next.eef_orientation?.map(v => v.toFixed(3)).join(", ") || "—";
+      document.querySelector("#datasetPath").textContent = next.dataset_path || "not created";
+      document.querySelector("#startButton").disabled = next.recording;
+      document.querySelector("#stopButton").disabled = !next.recording;
+      document.querySelector("#discardButton").disabled = !next.recording;
+      document.querySelector("#finishButton").disabled = next.recording || !next.dataset_path || next.finalized;
+      document.querySelector("#resetButton").disabled = next.recording;
+      document.querySelectorAll("kbd[data-key]").forEach(key => {
+        key.classList.toggle("active", next.keys?.includes(key.dataset.key));
+      });
+    }
+
+    window.addEventListener("keydown", event => {
+      const key = event.key.toLowerCase();
+      if (!movementKeys.has(key) || event.target.matches("input, textarea, select")) return;
+      event.preventDefault();
+      if (pressed.has(key)) return;
+      pressed.add(key);
+      send({type: "key", key, pressed: true});
+    });
+    window.addEventListener("keyup", event => {
+      const key = event.key.toLowerCase();
+      if (!movementKeys.has(key)) return;
+      event.preventDefault();
+      pressed.delete(key);
+      send({type: "key", key, pressed: false});
+    });
+    window.addEventListener("blur", () => {
+      pressed.clear();
+      send({type: "clear_keys"});
+    });
+    teleopPanel.addEventListener("click", focusTeleop);
+    document.querySelectorAll("input").forEach(input => {
+      input.addEventListener("focus", () => {
+        pressed.clear();
+        send({type: "clear_keys"});
+        keyboardHint.textContent = "Keyboard control paused while editing text. Click the control panel to resume.";
+      });
+    });
+
+    document.querySelector("#startButton").onclick = () => command("start_recording");
+    document.querySelector("#stopButton").onclick = () => command("stop_recording");
+    document.querySelector("#discardButton").onclick = () => command("discard_recording");
+    document.querySelector("#finishButton").onclick = () => command("finish_dataset");
+    document.querySelector("#resetButton").onclick = () => command("reset");
+
+    setInterval(async () => {
+      try {
+        const response = await fetch("/api/status");
+        updateStatus(await response.json());
+      } catch (_) {}
+    }, 500);
+    connect();
+  </script>
+</body>
+</html>
