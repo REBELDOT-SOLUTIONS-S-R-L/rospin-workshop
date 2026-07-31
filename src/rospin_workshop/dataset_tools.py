@@ -27,7 +27,6 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
         "observation.eef_position",
         "observation.eef_orientation",
         "observation.images.wrist",
-        "observation.images.perspective",
         "action",
     }
     missing = required.difference(dataset.features)
@@ -36,15 +35,10 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
     if dataset.num_episodes < 1 or dataset.num_frames < 1:
         raise ValueError("Dataset has no saved frames or episodes")
     sample = dataset[0]
-    for camera_key in (
-        "observation.images.wrist",
-        "observation.images.perspective",
-    ):
-        expected_h, expected_w, _ = dataset.features[camera_key]["shape"]
-        if tuple(sample[camera_key].shape) != (3, expected_h, expected_w):
-            raise ValueError(
-                f"Could not decode {camera_key} at its declared resolution"
-            )
+    camera_key = "observation.images.wrist"
+    expected_h, expected_w, _ = dataset.features[camera_key]["shape"]
+    if tuple(sample[camera_key].shape) != (3, expected_h, expected_w):
+        raise ValueError(f"Could not decode {camera_key} at its declared resolution")
     return {
         "root": str(root.resolve()),
         "repo_id": dataset.repo_id,

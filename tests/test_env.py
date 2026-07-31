@@ -47,6 +47,30 @@ def test_environment_contract_and_cameras() -> None:
         env.close()
 
 
+def test_perspective_camera_can_be_repositioned_and_aimed() -> None:
+    env = SO101WorkshopEnv(image_width=96, image_height=72)
+    try:
+        env.reset()
+        initial = env.capture_camera_observation("perspective")[
+            "observation.images.perspective"
+        ]
+        position = np.array([0.8, 0.25, 1.25])
+        lookat = np.array([0.0, -0.2, 0.78])
+        env.set_camera_lookat("perspective", position, lookat)
+        moved = env.capture_camera_observation("perspective")[
+            "observation.images.perspective"
+        ]
+
+        assert np.mean(np.abs(moved.astype(float) - initial.astype(float))) > 1.0
+        camera_id = env._camera_ids["perspective"]
+        forward = -env.data.cam_xmat[camera_id].reshape(3, 3)[:, 2]
+        expected_forward = lookat - position
+        expected_forward /= np.linalg.norm(expected_forward)
+        np.testing.assert_allclose(forward, expected_forward, atol=1e-7)
+    finally:
+        env.close()
+
+
 def test_cartesian_action_moves_eef_and_respects_joint_limits() -> None:
     env = SO101WorkshopEnv(image_width=64, image_height=48)
     try:

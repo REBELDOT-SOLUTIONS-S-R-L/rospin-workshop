@@ -74,6 +74,16 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
                     )
                 elif message_type == "clear_keys":
                     controller.clear_keys()
+                elif message_type == "camera":
+                    try:
+                        controller.control_perspective_camera(
+                            str(message.get("action", "")),
+                            dict(message),
+                        )
+                    except Exception as exc:  # noqa: BLE001 - report input errors
+                        await websocket.send_json(
+                            {"type": "error", "message": str(exc)}
+                        )
                 elif message_type == "command":
                     try:
                         await asyncio.to_thread(

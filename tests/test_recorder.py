@@ -14,7 +14,7 @@ def test_lerobot_v3_feature_schema(tmp_path) -> None:
     assert features["observation.state"]["shape"] == (6,)
     assert features["observation.images.wrist"]["dtype"] == "video"
     assert features["observation.images.wrist"]["shape"] == (240, 320, 3)
-    assert features["observation.images.perspective"]["shape"] == (240, 320, 3)
+    assert "observation.images.perspective" not in features
     assert features["observation.eef_orientation"]["shape"] == (4,)
     assert features["action"]["shape"] == (9,)
     assert features["action"]["names"][4:6] == [

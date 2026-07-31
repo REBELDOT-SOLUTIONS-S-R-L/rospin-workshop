@@ -6,7 +6,12 @@ from pathlib import Path
 import numpy as np
 
 from rospin_workshop.config import RuntimeConfig
-from rospin_workshop.controller import KEY_ACTIONS, WorkshopController
+from rospin_workshop.controller import (
+    KEY_ACTIONS,
+    PERSPECTIVE_DEFAULT_DISTANCE,
+    PerspectiveCamera,
+    WorkshopController,
+)
 from rospin_workshop.dataset_tools import inspect_dataset
 from rospin_workshop.env import ACTION_NAMES
 
@@ -88,13 +93,9 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
     assert (
         details["features"]["observation.images.wrist"]["info"]["video.codec"] == "h264"
     )
-    assert (
-        details["features"]["observation.images.perspective"]["info"]["video.codec"]
-        == "h264"
-    )
+    assert "observation.images.perspective" not in details["features"]
     assert details["decoded_frame_shapes"] == {
         "observation.images.wrist": [3, 72, 96],
-        "observation.images.perspective": [3, 72, 96],
     }
 
 
@@ -132,3 +133,37 @@ def test_keyboard_mapping_and_gripper_command_latching(tmp_path) -> None:
     controller.set_key("]", True)
     controller.set_key("]", False)
     assert controller._current_action()[-1] == 1
+
+
+def test_perspective_camera_orbit_pan_zoom_and_reset(tmp_path) -> None:
+    camera = PerspectiveCamera()
+    initial_position, initial_lookat = camera.view()
+    initial_status = camera.status()
+
+    camera.apply("orbit", {"dx": 80, "dy": -20})
+    orbit_position, orbit_lookat = camera.view()
+    assert not np.allclose(orbit_position, initial_position)
+    np.testing.assert_allclose(orbit_lookat, initial_lookat)
+
+    camera.apply("pan", {"dx": 25, "dy": -10})
+    pan_position, pan_lookat = camera.view()
+    assert not np.allclose(pan_lookat, initial_lookat)
+    np.testing.assert_allclose(
+        pan_position - pan_lookat,
+        orbit_position - orbit_lookat,
+        atol=1e-12,
+    )
+
+    camera.apply("zoom", {"delta": -100})
+    assert camera.status()["distance"] < initial_status["distance"]
+
+    camera.apply("reset", {})
+    reset_position, reset_lookat = camera.view()
+    np.testing.assert_allclose(reset_position, initial_position, atol=1e-8)
+    np.testing.assert_allclose(reset_lookat, initial_lookat)
+    assert np.isclose(camera.status()["distance"], PERSPECTIVE_DEFAULT_DISTANCE)
+
+    controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
+    assert not controller._render_requested.is_set()
+    controller.control_perspective_camera("orbit", {"dx": 10, "dy": 0})
+    assert not controller._render_requested.is_set()

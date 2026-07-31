@@ -69,11 +69,6 @@ class LeRobotV3Recorder:
                 "shape": image_shape,
                 "names": ["height", "width", "channels"],
             },
-            "observation.images.perspective": {
-                "dtype": "video",
-                "shape": image_shape,
-                "names": ["height", "width", "channels"],
-            },
             "action": {
                 "dtype": "float32",
                 "shape": (len(ACTION_NAMES),),
@@ -148,9 +143,6 @@ class LeRobotV3Recorder:
                 "observation.eef_orientation"
             ].copy(),
             "observation.images.wrist": observation["observation.images.wrist"].copy(),
-            "observation.images.perspective": observation[
-                "observation.images.perspective"
-            ].copy(),
             "action": np.asarray(action, dtype=np.float32).copy(),
         }
         self.dataset.add_frame(frame)

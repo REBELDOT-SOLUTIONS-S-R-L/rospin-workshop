@@ -244,6 +244,41 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         observation[f"observation.images.{camera}"] = self._renderer.render().copy()
         return observation
 
+    def set_camera_lookat(
+        self,
+        camera: str,
+        position: np.ndarray,
+        lookat: np.ndarray,
+    ) -> None:
+        """Place a fixed camera in world coordinates and aim it at a point."""
+
+        if camera not in CAMERA_NAMES:
+            raise KeyError(camera)
+        position = np.asarray(position, dtype=np.float64)
+        lookat = np.asarray(lookat, dtype=np.float64)
+        if position.shape != (3,) or lookat.shape != (3,):
+            raise ValueError("Camera position and lookat must each have shape (3,)")
+
+        forward = lookat - position
+        forward_norm = np.linalg.norm(forward)
+        if forward_norm < 1e-8:
+            raise ValueError("Camera position and lookat cannot be the same")
+        forward /= forward_norm
+        right = np.cross(forward, np.array([0.0, 0.0, 1.0]))
+        right_norm = np.linalg.norm(right)
+        if right_norm < 1e-8:
+            raise ValueError("Camera cannot look exactly along the world Z axis")
+        right /= right_norm
+        up = np.cross(right, forward)
+        rotation = np.column_stack((right, up, -forward))
+        quaternion = np.empty(4, dtype=np.float64)
+        mujoco.mju_mat2Quat(quaternion, rotation.ravel())
+
+        camera_id = self._camera_ids[camera]
+        self.model.cam_pos[camera_id] = position
+        self.model.cam_quat[camera_id] = quaternion
+        mujoco.mj_forward(self.model, self.data)
+
     def _get_state_obs(self) -> dict[str, np.ndarray]:
         return {
             "observation.state": self.joint_positions,

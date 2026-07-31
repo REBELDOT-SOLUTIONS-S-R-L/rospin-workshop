@@ -4,7 +4,7 @@ A portable, browser-operated robotics workshop stack:
 
 - MuJoCo physics with a custom Gymnasium environment
 - Cartesian end-effector translation and direct-joint keyboard teleoperation
-- wrist and fixed perspective camera observations
+- wrist camera observations and a movable perspective viewer
 - local LeRobot v3.0 episode recording
 - local ACT policy training through `lerobot-train`
 - one Docker workflow for Windows and macOS participants
@@ -88,13 +88,18 @@ arm. This follows LeIsaac's separation of Cartesian IK and direct SO-101 joint
 control while retaining the requested three-axis Cartesian translation keys.
 
 The robot mount faces 90 degrees toward world −Y, into the usable half of the
-table. The perspective camera is centered directly behind it on the +Y side,
-elevated and aimed down at the workspace. Full-scale held keys command at most
-12 cm/s translation or 0.8 rad/s joint motion, independent of the configured
-control rate. Releasing all arm-control keys synchronizes position targets to
-the current pose so the robot stops instead of finishing a queued motion.
-Gripper commands are absolute and latched: one press targets the corresponding
-joint limit and release does not interrupt the full open/close motion.
+table. The perspective viewer starts directly behind it on the +Y side,
+elevated and aimed down at the workspace. Drag the perspective image to orbit,
+Shift-drag to pan, and use the mouse wheel or `+` / `−` buttons to zoom. Double
+click or select **Reset view** to return to the starting pose. The perspective
+camera is viewer-only: changing its pose never enters a recording.
+
+Full-scale held keys command at most 12 cm/s translation or 0.8 rad/s joint
+motion, independent of the configured control rate. Releasing all arm-control
+keys synchronizes position targets to the current pose so the robot stops
+instead of finishing a queued motion. Gripper commands are absolute and
+latched: one press targets the corresponding joint limit and release does not
+interrupt the full open/close motion.
 
 ## Record a local LeRobot v3 dataset
 
@@ -120,16 +125,15 @@ Every frame contains:
 | `observation.eef_position` | `(3,)` | end-effector xyz |
 | `observation.eef_orientation` | `(4,)` | end-effector quaternion, wxyz |
 | `observation.images.wrist` | `(H, W, 3)` | wrist RGB, H.264 video |
-| `observation.images.perspective` | `(H, W, 3)` | fixed RGB, H.264 video |
-| `action` | `(7,)` | translation, rotation, and gripper command |
+| `action` | `(9,)` | translation, direct-joint rotation, and gripper command |
 
 Physics and keyboard input run at 60 Hz independently from two camera-specific
 render workers. The workers use separate software-rendering contexts so the
-wrist and perspective images are produced in parallel at 15 FPS; recordings
-pair frames from the same simulation snapshot, keeping timestamps and H.264
-streams consistent. Both scene lights have shadows disabled because the
-redundant software shadow pass nearly doubled camera latency without helping
-workshop control.
+wrist and perspective images are produced in parallel at 15 FPS. Only the
+wrist worker's frame is handed to the recorder; the movable perspective image
+remains a live browser view and is never included in the dataset. Both scene
+lights have shadows disabled because the redundant software shadow pass nearly
+doubled camera latency without helping workshop control.
 
 Datasets are never pushed to Hugging Face Hub. Because v3 metadata does not
 serialize `repo_id`, the tools deterministically use `local/<dataset-directory>`
@@ -150,11 +154,11 @@ docker compose run --rm --entrypoint rospin-check-dataset workshop `
 ```
 
 The validator loads the actual dataset and checks its version, frames,
-episodes, camera streams, joint state, and action features.
+episodes, wrist camera stream, joint state, and action features.
 
 The image build also runs `rospin-self-check`. It compiles and renders the
-MuJoCo model, steps the EEF controller, records a temporary two-camera v3
-episode, finalizes it, and decodes both videos. A broken runtime therefore fails
+MuJoCo model, steps the EEF controller, records a temporary wrist-camera v3
+episode, finalizes it, and decodes the video. A broken runtime therefore fails
 during `docker compose up --build`, before the workshop begins.
 
 ## Train ACT locally

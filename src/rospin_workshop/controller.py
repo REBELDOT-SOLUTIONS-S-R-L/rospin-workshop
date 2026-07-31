@@ -16,6 +16,17 @@ from rospin_workshop.recorder import LeRobotV3Recorder
 
 LOGGER = logging.getLogger(__name__)
 
+PERSPECTIVE_DEFAULT_POSITION = np.array([0.0, 0.72, 1.22], dtype=np.float64)
+PERSPECTIVE_DEFAULT_FORWARD = np.array(
+    [0.0, -0.89898987, -0.43796942],
+    dtype=np.float64,
+)
+PERSPECTIVE_DEFAULT_DISTANCE = 1.05
+PERSPECTIVE_DEFAULT_LOOKAT = (
+    PERSPECTIVE_DEFAULT_POSITION
+    + PERSPECTIVE_DEFAULT_FORWARD * PERSPECTIVE_DEFAULT_DISTANCE
+)
+
 KEY_ACTIONS: dict[str, np.ndarray] = {
     "w": np.array([0, 1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
     "s": np.array([0, -1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
@@ -38,6 +49,93 @@ KEY_ACTIONS: dict[str, np.ndarray] = {
 }
 
 
+class PerspectiveCamera:
+    """Thread-safe-by-owner orbit-camera state used by the web viewer."""
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        offset = PERSPECTIVE_DEFAULT_POSITION - PERSPECTIVE_DEFAULT_LOOKAT
+        self.lookat = PERSPECTIVE_DEFAULT_LOOKAT.copy()
+        self.distance = float(np.linalg.norm(offset))
+        self.azimuth = float(np.arctan2(offset[0], offset[1]))
+        self.elevation = float(np.arcsin(offset[2] / self.distance))
+
+    @staticmethod
+    def _delta(payload: dict[str, Any], name: str) -> float:
+        value = float(payload.get(name, 0.0))
+        if not np.isfinite(value):
+            raise ValueError(f"Camera {name} must be finite")
+        return float(np.clip(value, -500.0, 500.0))
+
+    def position(self) -> np.ndarray:
+        horizontal = self.distance * np.cos(self.elevation)
+        return self.lookat + np.array(
+            [
+                horizontal * np.sin(self.azimuth),
+                horizontal * np.cos(self.azimuth),
+                self.distance * np.sin(self.elevation),
+            ],
+            dtype=np.float64,
+        )
+
+    def apply(self, action: str, payload: dict[str, Any]) -> None:
+        if action == "orbit":
+            dx = self._delta(payload, "dx")
+            dy = self._delta(payload, "dy")
+            self.azimuth = (
+                (self.azimuth - dx * 0.006 + np.pi) % (2 * np.pi)
+            ) - np.pi
+            self.elevation = float(
+                np.clip(
+                    self.elevation - dy * 0.006,
+                    np.deg2rad(5.0),
+                    np.deg2rad(85.0),
+                )
+            )
+        elif action == "pan":
+            dx = self._delta(payload, "dx")
+            dy = self._delta(payload, "dy")
+            position = self.position()
+            forward = self.lookat - position
+            forward /= np.linalg.norm(forward)
+            right = np.cross(forward, np.array([0.0, 0.0, 1.0]))
+            right /= np.linalg.norm(right)
+            up = np.cross(right, forward)
+            scale = self.distance * 0.0015
+            self.lookat += (-right * dx + up * dy) * scale
+            self.lookat = np.clip(
+                self.lookat,
+                np.array([-2.0, -2.0, 0.0]),
+                np.array([2.0, 2.0, 2.5]),
+            )
+        elif action == "zoom":
+            delta = self._delta(payload, "delta")
+            self.distance = float(
+                np.clip(
+                    self.distance * np.exp(delta * 0.0015),
+                    0.3,
+                    3.0,
+                )
+            )
+        elif action == "reset":
+            self.reset()
+        else:
+            raise ValueError(f"Unknown perspective camera action: {action}")
+
+    def view(self) -> tuple[np.ndarray, np.ndarray]:
+        return self.position(), self.lookat.copy()
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "azimuth_degrees": round(float(np.rad2deg(self.azimuth)), 1),
+            "elevation_degrees": round(float(np.rad2deg(self.elevation)), 1),
+            "distance": round(self.distance, 3),
+            "lookat": self.lookat.round(3).tolist(),
+        }
+
+
 class WorkshopController:
     def __init__(self, config: RuntimeConfig) -> None:
         if config.camera_hz <= 0:
@@ -53,6 +151,7 @@ class WorkshopController:
         self._jpeg_frames: dict[str, bytes] = {}
         self._keys: set[str] = set()
         self._gripper_command = 0.0
+        self._perspective_camera = PerspectiveCamera()
         self._recorder: LeRobotV3Recorder | None = None
         self._last_dataset_path: Path | None = None
         self._message = "Ready"
@@ -76,6 +175,7 @@ class WorkshopController:
             "control_hz": self.config.control_hz,
             "camera_hz": self.config.camera_hz,
             "image_size": [self.config.image_width, self.config.image_height],
+            "perspective_camera": self._perspective_camera.status(),
         }
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
@@ -88,6 +188,7 @@ class WorkshopController:
                     np.ndarray,
                     int | None,
                     int,
+                    tuple[np.ndarray, np.ndarray] | None,
                 ]
             ],
         ] = {camera: queue.Queue(maxsize=1) for camera in CAMERA_NAMES}
@@ -155,6 +256,20 @@ class WorkshopController:
             self._keys.clear()
             self._status_cache = {**self._status_cache, "keys": []}
         self._render_requested.set()
+
+    def control_perspective_camera(
+        self,
+        action: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Update the viewer-only orbit camera without affecting recording."""
+
+        with self._lock:
+            self._perspective_camera.apply(action, payload)
+            self._status_cache = {
+                **self._status_cache,
+                "perspective_camera": self._perspective_camera.status(),
+            }
 
     def _current_action(self) -> np.ndarray:
         action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
@@ -258,12 +373,20 @@ class WorkshopController:
             )
             while not self._stop_event.is_set():
                 try:
-                    sequence, snapshot, action, recording_generation, epoch = (
-                        self._render_requests[camera].get(timeout=0.1)
-                    )
+                    (
+                        sequence,
+                        snapshot,
+                        action,
+                        recording_generation,
+                        epoch,
+                        camera_view,
+                    ) = self._render_requests[camera].get(timeout=0.1)
                 except queue.Empty:
                     continue
                 render_env.restore_simulation_snapshot(snapshot)
+                if camera_view is not None:
+                    position, lookat = camera_view
+                    render_env.set_camera_lookat(camera, position, lookat)
                 observation = render_env.capture_camera_observation(camera)
                 self._render_results.put(
                     (
@@ -298,10 +421,13 @@ class WorkshopController:
         self._pending_renders[sequence] = {
             "observation": {},
             "cameras": set(),
+            "recorded": False,
             "action": action_copy,
             "recording_generation": recording_generation,
             "epoch": self._render_epoch,
         }
+        with self._lock:
+            perspective_view = self._perspective_camera.view()
         for camera in CAMERA_NAMES:
             self._render_requests[camera].put_nowait(
                 (
@@ -310,6 +436,7 @@ class WorkshopController:
                     action_copy,
                     recording_generation,
                     self._render_epoch,
+                    perspective_view if camera == "perspective" else None,
                 )
             )
         self._render_inflight = True
@@ -353,6 +480,17 @@ class WorkshopController:
             with self._lock:
                 self._jpeg_frames[camera] = jpeg
 
+        if (
+            camera == "wrist"
+            and epoch == self._render_epoch
+            and not pending["recorded"]
+            and self._recorder is not None
+            and self._recorder.recording
+            and recording_generation == self._recording_generation
+        ):
+            self._recorder.add_frame(pending["observation"], action)
+            pending["recorded"] = True
+
         if pending["cameras"] != set(CAMERA_NAMES):
             return
 
@@ -361,12 +499,6 @@ class WorkshopController:
         paired_observation = pending["observation"]
         if epoch != self._render_epoch:
             return
-        if (
-            self._recorder is not None
-            and self._recorder.recording
-            and recording_generation == self._recording_generation
-        ):
-            self._recorder.add_frame(paired_observation, action)
         with self._lock:
             self._observation = paired_observation
             self._refresh_status_locked()
@@ -506,6 +638,7 @@ class WorkshopController:
             "control_hz": self.config.control_hz,
             "camera_hz": self.config.camera_hz,
             "image_size": [self.config.image_width, self.config.image_height],
+            "perspective_camera": self._perspective_camera.status(),
         }
 
     def status(self) -> dict[str, Any]:

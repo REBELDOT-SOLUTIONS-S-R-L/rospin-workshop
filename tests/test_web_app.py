@@ -24,9 +24,37 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         for key in ("r", "f", "t", "g"):
             assert f'data-key="{key}"' in page
         assert '"r", "f", "t", "g"' in page
+        assert 'id="perspectiveViewport"' in page
+        assert 'id="cameraResetButton"' in page
+        assert "drag orbit · Shift+drag pan · wheel zoom" in page
+        assert "Perspective · viewer only" in page
+        assert "Gripper camera · recorded" in page
 
         initial = client.get("/api/status").json()
         assert initial["error"] is None
+        initial_camera = initial["perspective_camera"]
+
+        with client.websocket_connect("/ws") as socket:
+            socket.send_json(
+                {"type": "camera", "action": "orbit", "dx": 80, "dy": -20}
+            )
+            orbit = socket.receive_json()["data"]["perspective_camera"]
+            assert orbit["azimuth_degrees"] != initial_camera["azimuth_degrees"]
+            assert orbit["elevation_degrees"] != initial_camera["elevation_degrees"]
+
+            socket.send_json(
+                {"type": "camera", "action": "pan", "dx": 25, "dy": -10}
+            )
+            pan = socket.receive_json()["data"]["perspective_camera"]
+            assert pan["lookat"] != orbit["lookat"]
+
+            socket.send_json({"type": "camera", "action": "zoom", "delta": -100})
+            zoom = socket.receive_json()["data"]["perspective_camera"]
+            assert zoom["distance"] < pan["distance"]
+
+            socket.send_json({"type": "camera", "action": "reset"})
+            reset = socket.receive_json()["data"]["perspective_camera"]
+            assert reset == initial_camera
 
         with client.websocket_connect("/ws") as socket:
             socket.send_json({"type": "key", "key": "w", "pressed": True})

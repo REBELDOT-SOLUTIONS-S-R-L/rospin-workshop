@@ -124,6 +124,8 @@ def main() -> None:
             recorder.stop_episode(save=True)
             dataset_path = recorder.finalize()
             dataset = inspect_dataset(dataset_path)
+            if "observation.images.perspective" in dataset["features"]:
+                raise RuntimeError("Viewer-only perspective camera entered the dataset")
 
             report = {
                 "status": "ok",
@@ -148,11 +150,9 @@ def main() -> None:
                     "episodes": dataset["episodes"],
                     "frames": dataset["frames"],
                     "video_codecs": {
-                        camera: dataset["features"][camera]["info"]["video.codec"]
-                        for camera in (
-                            "observation.images.wrist",
-                            "observation.images.perspective",
-                        )
+                        "observation.images.wrist": dataset["features"][
+                            "observation.images.wrist"
+                        ]["info"]["video.codec"]
                     },
                     "decoded_frame_shapes": dataset["decoded_frame_shapes"],
                 },

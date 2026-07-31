@@ -81,6 +81,38 @@
       display: block; width: 100%; aspect-ratio: 16 / 9;
       background: #06090d; object-fit: cover;
     }
+    .camera-viewport {
+      position: relative;
+      overflow: hidden;
+      background: #06090d;
+      touch-action: none;
+      user-select: none;
+      cursor: grab;
+    }
+    .camera-viewport.dragging { cursor: grabbing; }
+    .camera-viewport .camera { pointer-events: none; }
+    .camera-toolbar {
+      position: absolute; top: 10px; right: 10px; left: 10px;
+      display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+      pointer-events: none;
+    }
+    .camera-pose {
+      margin-right: auto; padding: 6px 8px; border-radius: 8px;
+      color: #dce9f8; background: #07101ac7;
+      font: 600 10px ui-monospace, monospace;
+      backdrop-filter: blur(8px);
+    }
+    .camera-toolbar button {
+      width: auto; padding: 6px 8px; border-radius: 7px;
+      color: #dce9f8; background: #07101ac7; font-size: 10px;
+      pointer-events: auto; backdrop-filter: blur(8px);
+    }
+    .camera-help {
+      position: absolute; right: 10px; bottom: 9px;
+      padding: 5px 7px; border-radius: 7px;
+      color: #c6d4e5; background: #07101ab8; font-size: 10px;
+      pointer-events: none; backdrop-filter: blur(8px);
+    }
     .teleop {
       grid-column: 1 / -1;
       padding: 18px;
@@ -153,11 +185,22 @@
   <main>
     <section class="views">
       <article class="card">
-        <div class="camera-title"><span>Perspective</span><span class="live">● live</span></div>
-        <img class="camera" src="/camera/perspective.mjpg" alt="Perspective camera">
+        <div class="camera-title"><span>Perspective · viewer only</span><span class="live">● live</span></div>
+        <div id="perspectiveViewport" class="camera-viewport"
+             aria-label="Movable perspective camera. Drag to orbit, Shift-drag to pan, and use the mouse wheel to zoom.">
+          <img class="camera" src="/camera/perspective.mjpg"
+               alt="Movable perspective camera" draggable="false">
+          <div class="camera-toolbar">
+            <span id="cameraPose" class="camera-pose">rear view</span>
+            <button id="cameraZoomOut" type="button" title="Zoom out">−</button>
+            <button id="cameraZoomIn" type="button" title="Zoom in">+</button>
+            <button id="cameraResetButton" type="button">Reset view</button>
+          </div>
+          <div class="camera-help">drag orbit · Shift+drag pan · wheel zoom</div>
+        </div>
       </article>
       <article class="card">
-        <div class="camera-title"><span>Gripper camera</span><span class="live">● live</span></div>
+        <div class="camera-title"><span>Gripper camera · recorded</span><span class="live">● live</span></div>
         <img class="camera" src="/camera/wrist.mjpg" alt="Gripper camera">
       </article>
       <article id="teleopPanel" class="card teleop" tabindex="0"
@@ -231,8 +274,12 @@
     const pressed = new Set();
     const teleopPanel = document.querySelector("#teleopPanel");
     const keyboardHint = document.querySelector("#keyboardHint");
+    const perspectiveViewport = document.querySelector("#perspectiveViewport");
     let socket;
     let status = {};
+    let cameraDrag;
+    let pendingCameraMotion;
+    let cameraMotionTimer;
 
     function focusTeleop() {
       teleopPanel.focus({preventScroll: true});
@@ -282,6 +329,25 @@
       });
     }
 
+    function flushCameraMotion() {
+      if (cameraMotionTimer) clearTimeout(cameraMotionTimer);
+      cameraMotionTimer = undefined;
+      if (!pendingCameraMotion) return;
+      send({type: "camera", ...pendingCameraMotion});
+      pendingCameraMotion = undefined;
+    }
+
+    function queueCameraMotion(action, dx, dy) {
+      if (pendingCameraMotion?.action === action) {
+        pendingCameraMotion.dx += dx;
+        pendingCameraMotion.dy += dy;
+      } else {
+        flushCameraMotion();
+        pendingCameraMotion = {action, dx, dy};
+      }
+      if (!cameraMotionTimer) cameraMotionTimer = setTimeout(flushCameraMotion, 33);
+    }
+
     function updateStatus(next) {
       status = next;
       const badge = document.querySelector("#recordingBadge");
@@ -295,6 +361,10 @@
       document.querySelector("#eef").textContent = next.eef_position?.map(v => v.toFixed(3)).join(", ") || "—";
       document.querySelector("#eefQuat").textContent = next.eef_orientation?.map(v => v.toFixed(3)).join(", ") || "—";
       document.querySelector("#datasetPath").textContent = next.dataset_path || "not created";
+      const camera = next.perspective_camera;
+      document.querySelector("#cameraPose").textContent = camera
+        ? `az ${camera.azimuth_degrees.toFixed(1)}° · el ${camera.elevation_degrees.toFixed(1)}° · ${camera.distance.toFixed(2)} m`
+        : "rear view";
       document.querySelector("#startButton").disabled = next.recording;
       document.querySelector("#stopButton").disabled = !next.recording;
       document.querySelector("#discardButton").disabled = !next.recording;
@@ -335,6 +405,55 @@
         keyboardHint.textContent = "Keyboard control paused while editing text. Click the control panel to resume.";
       });
     });
+
+    perspectiveViewport.addEventListener("pointerdown", event => {
+      if (event.button !== 0 || event.target.closest("button")) return;
+      event.preventDefault();
+      cameraDrag = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        action: event.shiftKey ? "pan" : "orbit",
+      };
+      perspectiveViewport.setPointerCapture(event.pointerId);
+      perspectiveViewport.classList.add("dragging");
+    });
+    perspectiveViewport.addEventListener("pointermove", event => {
+      if (!cameraDrag || event.pointerId !== cameraDrag.pointerId) return;
+      const dx = event.clientX - cameraDrag.x;
+      const dy = event.clientY - cameraDrag.y;
+      cameraDrag.x = event.clientX;
+      cameraDrag.y = event.clientY;
+      queueCameraMotion(cameraDrag.action, dx, dy);
+    });
+    function stopCameraDrag(event) {
+      if (!cameraDrag || event.pointerId !== cameraDrag.pointerId) return;
+      flushCameraMotion();
+      cameraDrag = undefined;
+      perspectiveViewport.classList.remove("dragging");
+    }
+    perspectiveViewport.addEventListener("pointerup", stopCameraDrag);
+    perspectiveViewport.addEventListener("pointercancel", stopCameraDrag);
+    perspectiveViewport.addEventListener("wheel", event => {
+      event.preventDefault();
+      send({
+        type: "camera",
+        action: "zoom",
+        delta: Math.max(-200, Math.min(200, event.deltaY)),
+      });
+    }, {passive: false});
+    perspectiveViewport.addEventListener("dblclick", () => {
+      send({type: "camera", action: "reset"});
+    });
+    document.querySelector("#cameraZoomOut").onclick = () => {
+      send({type: "camera", action: "zoom", delta: 120});
+    };
+    document.querySelector("#cameraZoomIn").onclick = () => {
+      send({type: "camera", action: "zoom", delta: -120});
+    };
+    document.querySelector("#cameraResetButton").onclick = () => {
+      send({type: "camera", action: "reset"});
+    };
 
     document.querySelector("#startButton").onclick = () => command("start_recording");
     document.querySelector("#stopButton").onclick = () => command("stop_recording");
