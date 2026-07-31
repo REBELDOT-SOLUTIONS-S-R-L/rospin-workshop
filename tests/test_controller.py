@@ -8,6 +8,7 @@ import numpy as np
 from rospin_workshop.config import RuntimeConfig
 from rospin_workshop.controller import KEY_ACTIONS, WorkshopController
 from rospin_workshop.dataset_tools import inspect_dataset
+from rospin_workshop.env import ACTION_NAMES
 
 
 def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
@@ -98,23 +99,36 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
 
 
 def test_keyboard_mapping_and_gripper_command_latching(tmp_path) -> None:
-    np.testing.assert_array_equal(
-        KEY_ACTIONS["w"], np.array([0, 1, 0, 0, 0, 0, 0], dtype=np.float32)
-    )
-    np.testing.assert_array_equal(
-        KEY_ACTIONS["s"], np.array([0, -1, 0, 0, 0, 0, 0], dtype=np.float32)
-    )
-    np.testing.assert_array_equal(
-        KEY_ACTIONS["a"], np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
-    )
-    np.testing.assert_array_equal(
-        KEY_ACTIONS["d"], np.array([-1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
-    )
+    expected_mappings = {
+        "w": (1, 1),
+        "s": (1, -1),
+        "a": (0, 1),
+        "d": (0, -1),
+        "q": (2, 1),
+        "e": (2, -1),
+        "u": (3, 1),
+        "o": (3, -1),
+        "r": (4, 1),
+        "f": (4, -1),
+        "t": (5, 1),
+        "g": (5, -1),
+        "i": (6, 1),
+        "k": (6, -1),
+        "j": (7, 1),
+        "l": (7, -1),
+        "[": (8, -1),
+        "]": (8, 1),
+    }
+    assert set(KEY_ACTIONS) == set(expected_mappings)
+    for key, (action_index, value) in expected_mappings.items():
+        expected = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+        expected[action_index] = value
+        np.testing.assert_array_equal(KEY_ACTIONS[key], expected)
 
     controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
     controller.set_key("[", True)
     controller.set_key("[", False)
-    assert controller._current_action()[6] == -1
+    assert controller._current_action()[-1] == -1
     controller.set_key("]", True)
     controller.set_key("]", False)
-    assert controller._current_action()[6] == 1
+    assert controller._current_action()[-1] == 1

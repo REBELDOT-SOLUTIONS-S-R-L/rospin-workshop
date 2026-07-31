@@ -20,6 +20,11 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         )
     )
     with TestClient(app) as client:
+        page = client.get("/").text
+        for key in ("r", "f", "t", "g"):
+            assert f'data-key="{key}"' in page
+        assert '"r", "f", "t", "g"' in page
+
         initial = client.get("/api/status").json()
         assert initial["error"] is None
 
@@ -61,7 +66,29 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         )
         assert target_changes.tolist() == [4]
 
-        gripper_start = rotated["joint_positions"][5]
+        for key, joint_index in (("r", 1), ("t", 2)):
+            time.sleep(0.1)
+            before = client.get("/api/status").json()
+            before_positions = np.asarray(before["joint_positions"])
+            before_targets = np.asarray(before["joint_targets"])
+            with client.websocket_connect("/ws") as socket:
+                socket.send_json({"type": "key", "key": key, "pressed": True})
+                socket.receive_json()
+                time.sleep(0.4)
+                active = client.get("/api/status").json()
+                socket.send_json({"type": "key", "key": key, "pressed": False})
+                socket.receive_json()
+            after = client.get("/api/status").json()
+            assert after["joint_positions"][joint_index] > (
+                before_positions[joint_index] + 0.005
+            )
+            active_targets = np.asarray(active["joint_targets"])
+            target_changes = np.flatnonzero(
+                np.abs(active_targets[:5] - before_targets[:5]) > 0.01
+            )
+            assert target_changes.tolist() == [joint_index]
+
+        gripper_start = client.get("/api/status").json()["joint_positions"][5]
         with client.websocket_connect("/ws") as socket:
             socket.send_json({"type": "key", "key": "[", "pressed": True})
             socket.receive_json()

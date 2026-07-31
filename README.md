@@ -74,16 +74,18 @@ dataset or task field, click the highlighted control panel again, then hold:
 | `I` / `K` | wrist flex + / − |
 | `J` / `L` | wrist roll + / − |
 | `U` / `O` | shoulder pan + / − |
+| `R` / `F` | shoulder lift + / − |
+| `T` / `G` | elbow flex + / − |
 | `[` / `]` | close fully / open fully |
 
 The Gymnasium action is
-`[eef_dx, eef_dy, eef_dz, shoulder_pan_delta, wrist_flex_delta,`
-`wrist_roll_delta, gripper_command]` in `[-1, 1]`. Damped least-squares IK maps
-only the world-frame translation command to the five arm joints. Rotation
-buttons address the named joint directly, so a wrist-roll command cannot be
-redistributed across the whole arm. This follows LeIsaac's separation of
-Cartesian IK and direct SO-101 joint control while retaining the requested
-three-axis Cartesian translation keys.
+`[eef_dx, eef_dy, eef_dz, shoulder_pan_delta, shoulder_lift_delta,`
+`elbow_flex_delta, wrist_flex_delta, wrist_roll_delta, gripper_command]` in
+`[-1, 1]`. Damped least-squares IK maps only the world-frame translation
+command to the five arm joints. Rotation buttons address the named joint
+directly, so a direct-joint command cannot be redistributed across the whole
+arm. This follows LeIsaac's separation of Cartesian IK and direct SO-101 joint
+control while retaining the requested three-axis Cartesian translation keys.
 
 The robot mount faces 90 degrees toward world −Y, into the usable half of the
 table. The perspective camera is centered directly behind it on the +Y side,

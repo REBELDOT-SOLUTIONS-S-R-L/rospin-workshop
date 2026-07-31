@@ -9,9 +9,16 @@ from rospin_workshop import ENV_ID
 from rospin_workshop.env import (
     ACTION_NAMES,
     CAMERA_NAMES,
+    DIRECT_JOINT_ACTIONS,
     JOINT_NAMES,
     SO101WorkshopEnv,
 )
+
+
+def _action(index: int, value: float = 1.0) -> np.ndarray:
+    action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+    action[index] = value
+    return action
 
 
 def test_environment_contract_and_cameras() -> None:
@@ -46,7 +53,7 @@ def test_cartesian_action_moves_eef_and_respects_joint_limits() -> None:
         env.reset()
         start = env.eef_position.copy()
         for _ in range(12):
-            env.step(np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32))
+            env.step(_action(0))
         assert np.linalg.norm(env.eef_position - start) > 0.01
         ranges = env.model.jnt_range[env._joint_ids]
         assert np.all(env.data.ctrl >= ranges[:, 0] - 1e-8)
@@ -64,11 +71,9 @@ def test_rotation_actions_address_only_the_named_joint_target() -> None:
     )
     try:
         env.reset()
-        for action_index, joint_index in ((3, 0), (4, 3), (5, 4)):
+        for action_index, joint_index in DIRECT_JOINT_ACTIONS:
             before = env.data.ctrl.copy()
-            action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
-            action[action_index] = 1
-            env.step_dynamics(action)
+            env.step_dynamics(_action(action_index))
             changed = np.flatnonzero(np.abs(env.data.ctrl - before) > 1e-8)
             assert changed.tolist() == [joint_index]
             env.reset()
@@ -80,7 +85,7 @@ def test_releasing_controls_cancels_queued_servo_motion() -> None:
     env = SO101WorkshopEnv(render_mode=None, control_hz=60)
     try:
         env.reset()
-        action = np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
+        action = _action(0)
         for _ in range(12):
             env.step_dynamics(action)
         env.step_dynamics(np.zeros(len(ACTION_NAMES), dtype=np.float32))
@@ -107,8 +112,7 @@ def test_gripper_commands_latch_full_joint_travel() -> None:
     try:
         env.reset()
         gripper_range = env.model.jnt_range[env._joint_ids[-1]]
-        close = np.zeros(len(ACTION_NAMES), dtype=np.float32)
-        close[6] = -1
+        close = _action(-1, -1)
         env.step_dynamics(close)
         assert env.data.ctrl[-1] == gripper_range[0]
         idle = np.zeros(len(ACTION_NAMES), dtype=np.float32)
@@ -116,8 +120,7 @@ def test_gripper_commands_latch_full_joint_travel() -> None:
             env.step_dynamics(idle)
         assert env.joint_positions[-1] < gripper_range[0] + 0.05
 
-        open_gripper = np.zeros(len(ACTION_NAMES), dtype=np.float32)
-        open_gripper[6] = 1
+        open_gripper = _action(-1)
         env.step_dynamics(open_gripper)
         assert env.data.ctrl[-1] == gripper_range[1]
         for _ in range(120):
@@ -157,9 +160,7 @@ def test_state_only_mode_advances_without_a_renderer() -> None:
         observation, _ = env.reset()
         assert env._renderer is None
         assert not any(key.startswith("observation.images.") for key in observation)
-        observation, _, _, _, _ = env.step_dynamics(
-            np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
-        )
+        observation, _, _, _, _ = env.step_dynamics(_action(0))
         assert env.observation_space.contains(observation)
         assert env.data.time > 0
     finally:

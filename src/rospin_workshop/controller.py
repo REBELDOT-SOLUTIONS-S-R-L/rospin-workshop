@@ -17,20 +17,24 @@ from rospin_workshop.recorder import LeRobotV3Recorder
 LOGGER = logging.getLogger(__name__)
 
 KEY_ACTIONS: dict[str, np.ndarray] = {
-    "w": np.array([0, 1, 0, 0, 0, 0, 0], dtype=np.float32),
-    "s": np.array([0, -1, 0, 0, 0, 0, 0], dtype=np.float32),
-    "a": np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32),
-    "d": np.array([-1, 0, 0, 0, 0, 0, 0], dtype=np.float32),
-    "q": np.array([0, 0, 1, 0, 0, 0, 0], dtype=np.float32),
-    "e": np.array([0, 0, -1, 0, 0, 0, 0], dtype=np.float32),
-    "i": np.array([0, 0, 0, 0, 1, 0, 0], dtype=np.float32),
-    "k": np.array([0, 0, 0, 0, -1, 0, 0], dtype=np.float32),
-    "j": np.array([0, 0, 0, 0, 0, 1, 0], dtype=np.float32),
-    "l": np.array([0, 0, 0, 0, 0, -1, 0], dtype=np.float32),
-    "u": np.array([0, 0, 0, 1, 0, 0, 0], dtype=np.float32),
-    "o": np.array([0, 0, 0, -1, 0, 0, 0], dtype=np.float32),
-    "[": np.array([0, 0, 0, 0, 0, 0, -1], dtype=np.float32),
-    "]": np.array([0, 0, 0, 0, 0, 0, 1], dtype=np.float32),
+    "w": np.array([0, 1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    "s": np.array([0, -1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    "a": np.array([1, 0, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    "d": np.array([-1, 0, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    "q": np.array([0, 0, 1, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    "e": np.array([0, 0, -1, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    "u": np.array([0, 0, 0, 1, 0, 0, 0, 0, 0], dtype=np.float32),
+    "o": np.array([0, 0, 0, -1, 0, 0, 0, 0, 0], dtype=np.float32),
+    "r": np.array([0, 0, 0, 0, 1, 0, 0, 0, 0], dtype=np.float32),
+    "f": np.array([0, 0, 0, 0, -1, 0, 0, 0, 0], dtype=np.float32),
+    "t": np.array([0, 0, 0, 0, 0, 1, 0, 0, 0], dtype=np.float32),
+    "g": np.array([0, 0, 0, 0, 0, -1, 0, 0, 0], dtype=np.float32),
+    "i": np.array([0, 0, 0, 0, 0, 0, 1, 0, 0], dtype=np.float32),
+    "k": np.array([0, 0, 0, 0, 0, 0, -1, 0, 0], dtype=np.float32),
+    "j": np.array([0, 0, 0, 0, 0, 0, 0, 1, 0], dtype=np.float32),
+    "l": np.array([0, 0, 0, 0, 0, 0, 0, -1, 0], dtype=np.float32),
+    "[": np.array([0, 0, 0, 0, 0, 0, 0, 0, -1], dtype=np.float32),
+    "]": np.array([0, 0, 0, 0, 0, 0, 0, 0, 1], dtype=np.float32),
 }
 
 
@@ -159,7 +163,7 @@ class WorkshopController:
             gripper_command = self._gripper_command
         for key in keys:
             action += KEY_ACTIONS[key]
-        action[6] = gripper_command
+        action[-1] = gripper_command
         return np.clip(action, -1.0, 1.0)
 
     @staticmethod

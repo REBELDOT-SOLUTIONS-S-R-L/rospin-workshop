@@ -26,9 +26,19 @@ ACTION_NAMES = (
     "eef_dy",
     "eef_dz",
     "shoulder_pan_delta",
+    "shoulder_lift_delta",
+    "elbow_flex_delta",
     "wrist_flex_delta",
     "wrist_roll_delta",
     "gripper_command",
+)
+
+DIRECT_JOINT_ACTIONS = (
+    (3, 0),  # shoulder pan
+    (4, 1),  # shoulder lift
+    (5, 2),  # elbow flex
+    (6, 3),  # wrist flex
+    (7, 4),  # wrist roll
 )
 
 
@@ -53,11 +63,12 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
     """MuJoCo/Gymnasium environment with Cartesian translation and joint rotation.
 
     Actions are normalized deltas
-    ``[dx, dy, dz, shoulder_pan, wrist_flex, wrist_roll, gripper]`` in
-    ``[-1, 1]``. World-frame EEF translation uses damped least-squares
-    differential IK. Rotation controls address real joints directly. The final
-    element is a latched absolute gripper command: negative closes fully,
-    positive opens fully, and zero retains the existing target.
+    ``[dx, dy, dz, shoulder_pan, shoulder_lift, elbow_flex, wrist_flex,
+    wrist_roll, gripper]`` in ``[-1, 1]``. World-frame EEF translation uses
+    damped least-squares differential IK. Rotation controls address all five
+    arm joints directly. The final element is a latched absolute gripper
+    command: negative closes fully, positive opens fully, and zero retains the
+    existing target.
     """
 
     metadata: ClassVar[dict[str, Any]] = {
@@ -266,7 +277,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             # letting a queued position target continue moving it. Latch only
             # on the active-to-idle transition; repeatedly following qpos would
             # let gravity walk the idle robot downward.
-            if np.any(self._previous_action[:6]):
+            if np.any(self._previous_action[:-1]):
                 self.data.ctrl[:-1] = self.joint_positions[:-1]
             self._previous_action = action.copy()
             return
@@ -289,19 +300,17 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             # command, even when the user switches keys between control ticks.
             arm_targets[:] = self.joint_positions[:-1]
         arm_targets += joint_delta
-        for action_index, joint_index in ((3, 0), (4, 3), (5, 4)):
+        for action_index, joint_index in DIRECT_JOINT_ACTIONS:
             if self._previous_action[action_index] and not action[action_index]:
                 arm_targets[joint_index] = self.joint_positions[joint_index]
-        arm_targets[0] += action[3] * self.joint_step
-        arm_targets[3] += action[4] * self.joint_step
-        arm_targets[4] += action[5] * self.joint_step
+            arm_targets[joint_index] += action[action_index] * self.joint_step
         arm_ranges = self.model.jnt_range[self._joint_ids[:-1]]
         self.data.ctrl[:-1] = np.clip(arm_targets, arm_ranges[:, 0], arm_ranges[:, 1])
 
         gripper_range = self.model.jnt_range[self._joint_ids[-1]]
-        if action[6] < 0:
+        if action[-1] < 0:
             self.data.ctrl[-1] = gripper_range[0]
-        elif action[6] > 0:
+        elif action[-1] > 0:
             self.data.ctrl[-1] = gripper_range[1]
         self._previous_action = action.copy()
 

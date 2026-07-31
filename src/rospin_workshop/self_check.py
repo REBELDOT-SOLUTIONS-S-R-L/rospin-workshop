@@ -11,13 +11,34 @@ import numpy as np
 import torch
 
 from rospin_workshop.dataset_tools import inspect_dataset
-from rospin_workshop.env import SO101WorkshopEnv
+from rospin_workshop.env import (
+    ACTION_NAMES,
+    DIRECT_JOINT_ACTIONS,
+    JOINT_NAMES,
+    SO101WorkshopEnv,
+)
 from rospin_workshop.recorder import LeRobotV3Recorder
 
 
 def main() -> None:
     env = SO101WorkshopEnv(image_width=96, image_height=72, control_hz=20)
     try:
+        observation, _ = env.reset(seed=7)
+        direct_joint_target_checks: dict[str, str] = {}
+        for action_index, joint_index in DIRECT_JOINT_ACTIONS:
+            before = env.data.ctrl.copy()
+            action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+            action[action_index] = 1
+            env.step_dynamics(action)
+            changed = np.flatnonzero(np.abs(env.data.ctrl - before) > 1e-8)
+            if changed.tolist() != [joint_index]:
+                raise RuntimeError(
+                    f"{ACTION_NAMES[action_index]} targeted joints "
+                    f"{changed.tolist()}, expected [{joint_index}]"
+                )
+            direct_joint_target_checks[JOINT_NAMES[joint_index]] = "ok"
+            env.reset()
+
         observation, _ = env.reset(seed=7)
         start_position = env.eef_position.copy()
         with tempfile.TemporaryDirectory(prefix="rospin-self-check-") as temp_dir:
@@ -31,18 +52,20 @@ def main() -> None:
                 dataset_name="self_check", task="verify packaged runtime"
             )
             for _ in range(10):
-                action = np.array([1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
+                action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+                action[0] = 1
                 observation, _, _, _, _ = env.step(action)
                 recorder.add_frame(observation, action)
             translated_position = env.eef_position.copy()
-            brake_action = np.zeros(7, dtype=np.float32)
+            brake_action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
             observation, _, _, _, _ = env.step(brake_action)
             recorder.add_frame(observation, brake_action)
             rotation_start = env.eef_orientation.copy()
             joint_start = env.joint_positions.copy()
             target_start = env.data.ctrl.copy()
             for _ in range(10):
-                action = np.array([0, 0, 0, 0, 0, 1, 0], dtype=np.float32)
+                action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+                action[ACTION_NAMES.index("wrist_roll_delta")] = 1
                 observation, _, _, _, _ = env.step(action)
                 recorder.add_frame(observation, action)
             translation_x = float(translated_position[0] - start_position[0])
@@ -75,11 +98,11 @@ def main() -> None:
                     f"{changed_joint_targets.tolist()}"
                 )
             gripper_range = env.model.jnt_range[env._joint_ids[-1]]
-            close_gripper = np.zeros(7, dtype=np.float32)
-            close_gripper[6] = -1
+            close_gripper = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+            close_gripper[-1] = -1
             env.step_dynamics(close_gripper)
             for _ in range(40):
-                env.step_dynamics(np.zeros(7, dtype=np.float32))
+                env.step_dynamics(np.zeros(len(ACTION_NAMES), dtype=np.float32))
             closed_gripper_position = float(env.joint_positions[-1])
             if closed_gripper_position > gripper_range[0] + 0.05:
                 raise RuntimeError(
@@ -87,11 +110,11 @@ def main() -> None:
                     f"{closed_gripper_position}"
                 )
 
-            open_gripper = np.zeros(7, dtype=np.float32)
-            open_gripper[6] = 1
+            open_gripper = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+            open_gripper[-1] = 1
             env.step_dynamics(open_gripper)
             for _ in range(60):
-                env.step_dynamics(np.zeros(7, dtype=np.float32))
+                env.step_dynamics(np.zeros(len(ACTION_NAMES), dtype=np.float32))
             opened_gripper_position = float(env.joint_positions[-1])
             if opened_gripper_position < gripper_range[1] - 0.05:
                 raise RuntimeError(
@@ -116,6 +139,7 @@ def main() -> None:
                     "cameras": env.model.ncam,
                     "positive_x_displacement_m": translation_x,
                     "positive_wrist_roll_rotation_rad": rotation_angle,
+                    "direct_joint_targets": direct_joint_target_checks,
                     "closed_gripper_position_rad": closed_gripper_position,
                     "opened_gripper_position_rad": opened_gripper_position,
                 },
