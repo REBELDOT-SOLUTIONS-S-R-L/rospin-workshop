@@ -15,7 +15,7 @@ class RuntimeConfig:
     host: str = os.environ.get("ROSPIN_HOST", "0.0.0.0")
     port: int = _int_env("ROSPIN_PORT", 8000)
     control_hz: int = _int_env("ROSPIN_CONTROL_HZ", 60)
-    camera_hz: int = _int_env("ROSPIN_CAMERA_HZ", 15)
+    camera_hz: int = _int_env("ROSPIN_CAMERA_HZ", 25)
     image_width: int = _int_env("ROSPIN_IMAGE_WIDTH", 480)
     image_height: int = _int_env("ROSPIN_IMAGE_HEIGHT", 270)
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from rospin_workshop.config import RuntimeConfig
 from rospin_workshop.recorder import LeRobotV3Recorder
 
 
 def test_lerobot_v3_feature_schema(tmp_path) -> None:
+    assert RuntimeConfig(data_root=tmp_path).camera_hz == 25
     recorder = LeRobotV3Recorder(
         datasets_root=tmp_path,
         fps=20,

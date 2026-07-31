@@ -73,7 +73,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
 
     metadata: ClassVar[dict[str, Any]] = {
         "render_modes": ["rgb_array"],
-        "render_fps": 15,
+        "render_fps": 25,
     }
 
     def __init__(
@@ -151,6 +151,11 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         # Keep simulation time synchronized with wall time even when the
         # configured control period is not an integer multiple of the XML step.
         self.model.opt.timestep = 1.0 / (self.control_hz * self._physics_steps)
+        if self.render_mode == "rgb_array":
+            # MuJoCo's software renderer performs an expensive additional scene
+            # pass when any material has reflectance. The workshop cameras need
+            # deterministic 25 Hz capture more than subtle glossy highlights.
+            self.model.mat_reflectance[:] = 0.0
         self._renderer = (
             mujoco.Renderer(
                 self.model, height=self.image_height, width=self.image_width

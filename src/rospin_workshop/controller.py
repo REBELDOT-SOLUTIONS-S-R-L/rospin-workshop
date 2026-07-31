@@ -249,13 +249,11 @@ class WorkshopController:
                 **self._status_cache,
                 "keys": sorted(self._keys),
             }
-        self._render_requested.set()
 
     def clear_keys(self) -> None:
         with self._lock:
             self._keys.clear()
             self._status_cache = {**self._status_cache, "keys": []}
-        self._render_requested.set()
 
     def control_perspective_camera(
         self,

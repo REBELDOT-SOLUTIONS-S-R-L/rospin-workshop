@@ -129,11 +129,14 @@ Every frame contains:
 
 Physics and keyboard input run at 60 Hz independently from two camera-specific
 render workers. The workers use separate software-rendering contexts so the
-wrist and perspective images are produced in parallel at 15 FPS. Only the
+wrist and perspective images are produced in parallel at 25 FPS. Only the
 wrist worker's frame is handed to the recorder; the movable perspective image
-remains a live browser view and is never included in the dataset. Both scene
-lights have shadows disabled because the redundant software shadow pass nearly
-doubled camera latency without helping workshop control.
+remains a live browser view and is never included in the dataset. Each saved
+row combines state, action, and its wrist frame from the same 25 Hz simulation
+snapshot; key transitions do not inject extra off-cadence rows. Both scene
+lights have shadows disabled and glossy material reflections are removed
+because their redundant software-rendering passes prevent reliable 25 Hz
+capture without helping workshop control.
 
 Datasets are never pushed to Hugging Face Hub. Because v3 metadata does not
 serialize `repo_id`, the tools deterministically use `local/<dataset-directory>`
@@ -253,7 +256,7 @@ Set environment variables in `compose.yaml`:
 | Variable | Default | Purpose |
 |---|---:|---|
 | `ROSPIN_CONTROL_HZ` | `60` | simulation physics and keyboard command rate |
-| `ROSPIN_CAMERA_HZ` | `15` | browser camera and dataset recording FPS |
+| `ROSPIN_CAMERA_HZ` | `25` | browser camera and dataset recording FPS |
 | `ROSPIN_IMAGE_WIDTH` | `480` | both camera widths; default is 16:9 |
 | `ROSPIN_IMAGE_HEIGHT` | `270` | both camera heights; default is 16:9 |
 | `ROSPIN_DATA_ROOT` | `/workspace/data` | datasets and training outputs |

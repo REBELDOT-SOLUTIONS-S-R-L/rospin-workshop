@@ -20,8 +20,8 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
     controller = WorkshopController(
         RuntimeConfig(
             data_root=tmp_path,
-            control_hz=20,
-            camera_hz=5,
+            control_hz=50,
+            camera_hz=25,
             image_width=96,
             image_height=72,
         )
@@ -34,7 +34,7 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
         controller.set_key("w", False)
         assert controller.status()["eef_position"][1] < start_y - 0.005
         assert controller.status()["sim_time"] >= 0.2
-        assert controller.status()["camera_hz"] == 5
+        assert controller.status()["camera_hz"] == 25
 
         start_x = controller.status()["eef_position"][0]
         controller.set_key("a", True)
@@ -76,7 +76,12 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
             "start_recording",
             {"dataset_name": "test_session", "task": "move the end effector"},
         )
-        time.sleep(0.7)
+        recording_started = time.monotonic()
+        time.sleep(1.0)
+        recorded_frames = controller.status()["frames_in_episode"]
+        recording_elapsed = time.monotonic() - recording_started
+        assert 24 <= recorded_frames <= 27
+        assert 23.0 <= (recorded_frames - 1) / recording_elapsed <= 26.0
         controller.command("stop_recording", {})
         controller.command("finish_dataset", {})
         status = controller.status()
@@ -89,9 +94,14 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
     details = inspect_dataset(dataset_path)
     assert details["codebase_version"] == "v3.0"
     assert details["episodes"] == 1
-    assert details["fps"] == 5
+    assert details["fps"] == 25
+    assert details["video_fps"] == 25
+    assert np.isclose(details["timestamp_step_seconds"], 0.04, atol=1e-5)
     assert (
         details["features"]["observation.images.wrist"]["info"]["video.codec"] == "h264"
+    )
+    assert (
+        details["features"]["observation.images.wrist"]["info"]["video.fps"] == 25
     )
     assert "observation.images.perspective" not in details["features"]
     assert details["decoded_frame_shapes"] == {
@@ -127,8 +137,10 @@ def test_keyboard_mapping_and_gripper_command_latching(tmp_path) -> None:
         np.testing.assert_array_equal(KEY_ACTIONS[key], expected)
 
     controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
+    assert not controller._render_requested.is_set()
     controller.set_key("[", True)
     controller.set_key("[", False)
+    assert not controller._render_requested.is_set()
     assert controller._current_action()[-1] == -1
     controller.set_key("]", True)
     controller.set_key("]", False)

@@ -27,6 +27,7 @@ def test_environment_contract_and_cameras() -> None:
         observation, info = env.reset(seed=7)
         assert env.observation_space.contains(observation)
         assert env.action_space.shape == (len(ACTION_NAMES),)
+        assert env.metadata["render_fps"] == 25
         assert len(JOINT_NAMES) == 6
         assert set(CAMERA_NAMES) == {"wrist", "perspective"}
         assert observation["observation.images.wrist"].shape == (72, 96, 3)
@@ -43,6 +44,7 @@ def test_environment_contract_and_cameras() -> None:
         assert abs(info["eef_position"][1]) < 0.30
         assert 0.80 < info["eef_position"][2] < 1.00
         assert env.model.nmesh == 13
+        assert np.all(env.model.mat_reflectance == 0)
     finally:
         env.close()
 

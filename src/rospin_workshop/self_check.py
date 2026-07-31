@@ -21,7 +21,7 @@ from rospin_workshop.recorder import LeRobotV3Recorder
 
 
 def main() -> None:
-    env = SO101WorkshopEnv(image_width=96, image_height=72, control_hz=20)
+    env = SO101WorkshopEnv(image_width=96, image_height=72, control_hz=25)
     try:
         observation, _ = env.reset(seed=7)
         direct_joint_target_checks: dict[str, str] = {}
@@ -44,7 +44,7 @@ def main() -> None:
         with tempfile.TemporaryDirectory(prefix="rospin-self-check-") as temp_dir:
             recorder = LeRobotV3Recorder(
                 datasets_root=Path(temp_dir),
-                fps=20,
+                fps=25,
                 image_width=96,
                 image_height=72,
             )
@@ -126,6 +126,10 @@ def main() -> None:
             dataset = inspect_dataset(dataset_path)
             if "observation.images.perspective" in dataset["features"]:
                 raise RuntimeError("Viewer-only perspective camera entered the dataset")
+            if dataset["fps"] != 25 or dataset["video_fps"] != 25:
+                raise RuntimeError("Dataset and wrist video are not both 25 FPS")
+            if not np.isclose(dataset["timestamp_step_seconds"], 0.04, atol=1e-5):
+                raise RuntimeError("Dataset timestamps are not spaced at 25 Hz")
 
             report = {
                 "status": "ok",
@@ -149,6 +153,8 @@ def main() -> None:
                     "format": dataset["codebase_version"],
                     "episodes": dataset["episodes"],
                     "frames": dataset["frames"],
+                    "fps": dataset["fps"],
+                    "timestamp_step_seconds": dataset["timestamp_step_seconds"],
                     "video_codecs": {
                         "observation.images.wrist": dataset["features"][
                             "observation.images.wrist"

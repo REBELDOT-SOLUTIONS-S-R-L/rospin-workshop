@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,31 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
     expected_h, expected_w, _ = dataset.features[camera_key]["shape"]
     if tuple(sample[camera_key].shape) != (3, expected_h, expected_w):
         raise ValueError(f"Could not decode {camera_key} at its declared resolution")
+    video_fps = float(dataset.features[camera_key]["info"]["video.fps"])
+    if not math.isclose(video_fps, float(dataset.fps)):
+        raise ValueError(
+            f"{camera_key} video FPS {video_fps} does not match dataset FPS "
+            f"{dataset.fps}"
+        )
+
+    timestamp_step_seconds: float | None = None
+    first_episode = int(sample["episode_index"])
+    first_timestamp = float(sample["timestamp"])
+    for index in range(1, min(dataset.num_frames, 1000)):
+        next_sample = dataset[index]
+        if int(next_sample["episode_index"]) != first_episode:
+            break
+        timestamp_step_seconds = float(next_sample["timestamp"]) - first_timestamp
+        break
+    if timestamp_step_seconds is not None and not math.isclose(
+        timestamp_step_seconds,
+        1.0 / float(dataset.fps),
+        abs_tol=1e-5,
+    ):
+        raise ValueError(
+            f"Dataset timestamp step {timestamp_step_seconds} does not match "
+            f"{dataset.fps} FPS"
+        )
     return {
         "root": str(root.resolve()),
         "repo_id": dataset.repo_id,
@@ -46,6 +72,8 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
         "episodes": dataset.num_episodes,
         "frames": dataset.num_frames,
         "fps": dataset.fps,
+        "video_fps": video_fps,
+        "timestamp_step_seconds": timestamp_step_seconds,
         "features": dataset.features,
         "decoded_frame_shapes": {
             key: list(value.shape)
