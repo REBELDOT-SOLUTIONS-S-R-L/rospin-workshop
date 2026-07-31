@@ -28,8 +28,8 @@ PERSPECTIVE_DEFAULT_LOOKAT = (
 )
 
 KEY_ACTIONS: dict[str, np.ndarray] = {
-    "w": np.array([0, 1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
-    "s": np.array([0, -1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    "w": np.array([0, -1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    "s": np.array([0, 1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
     "a": np.array([1, 0, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
     "d": np.array([-1, 0, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
     "q": np.array([0, 0, 1, 0, 0, 0, 0, 0, 0], dtype=np.float32),

@@ -32,7 +32,7 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
         controller.set_key("w", True)
         time.sleep(0.5)
         controller.set_key("w", False)
-        assert controller.status()["eef_position"][1] > start_y + 0.005
+        assert controller.status()["eef_position"][1] < start_y - 0.005
         assert controller.status()["sim_time"] >= 0.2
         assert controller.status()["camera_hz"] == 5
 
@@ -101,8 +101,8 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
 
 def test_keyboard_mapping_and_gripper_command_latching(tmp_path) -> None:
     expected_mappings = {
-        "w": (1, 1),
-        "s": (1, -1),
+        "w": (1, -1),
+        "s": (1, 1),
         "a": (0, 1),
         "d": (0, -1),
         "q": (2, 1),

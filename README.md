@@ -68,7 +68,7 @@ dataset or task field, click the highlighted control panel again, then hold:
 
 | Keys | Command |
 |---|---|
-| `W` / `S` | end effector +Y / −Y |
+| `W` / `S` | end effector −Y / +Y |
 | `A` / `D` | end effector +X / −X |
 | `Q` / `E` | end effector +Z / −Z |
 | `I` / `K` | wrist flex + / − |
