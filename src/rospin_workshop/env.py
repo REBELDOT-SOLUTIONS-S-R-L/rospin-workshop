@@ -86,6 +86,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         control_hz: int = 60,
         translation_speed: float = 0.12,
         joint_speed: float = 0.8,
+        gripper_speed: float = 2.5,
         ik_damping: float = 0.04,
         max_joint_step: float = 0.10,
     ) -> None:
@@ -101,6 +102,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self.control_hz = control_hz
         self.translation_step = translation_speed / control_hz
         self.joint_step = joint_speed / control_hz
+        self.gripper_step = gripper_speed / control_hz
         self.ik_damping = ik_damping
         self.max_joint_step = max_joint_step
 
@@ -213,6 +215,10 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
     @property
     def joint_velocities(self) -> np.ndarray:
         return self.data.qvel[self._dof_indices].astype(np.float32, copy=True)
+
+    @property
+    def joint_ranges(self) -> np.ndarray:
+        return self.model.jnt_range[self._joint_ids].astype(np.float64, copy=True)
 
     @property
     def eef_position(self) -> np.ndarray:
@@ -369,6 +375,47 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         for _ in range(self._physics_steps):
             mujoco.mj_step(self.model, self.data)
         return self._get_state_obs(), 0.0, False, False, self._get_info()
+
+    def step_joint_targets(
+        self,
+        targets: np.ndarray,
+    ) -> tuple[dict[str, np.ndarray], float, bool, bool, dict[str, Any]]:
+        """Rate-limit absolute joint targets and advance one control tick."""
+
+        targets = np.asarray(targets, dtype=np.float64)
+        if targets.shape != (len(JOINT_NAMES),):
+            raise ValueError(
+                f"Expected {len(JOINT_NAMES)} joint targets, got {targets.shape}"
+            )
+        if not np.all(np.isfinite(targets)):
+            raise ValueError("Joint targets must all be finite")
+
+        ranges = self.joint_ranges
+        desired = np.clip(targets, ranges[:, 0], ranges[:, 1])
+        max_steps = np.full(len(JOINT_NAMES), self.joint_step, dtype=np.float64)
+        max_steps[-1] = self.gripper_step
+        delta = np.clip(desired - self.data.ctrl, -max_steps, max_steps)
+        self.data.ctrl[:] = np.clip(
+            self.data.ctrl + delta,
+            ranges[:, 0],
+            ranges[:, 1],
+        )
+        # Absolute remote targets and normalized keyboard deltas have separate
+        # transition semantics. A later keyboard command should start cleanly.
+        self._previous_action.fill(0)
+        for _ in range(self._physics_steps):
+            mujoco.mj_step(self.model, self.data)
+        return self._get_state_obs(), 0.0, False, False, self._get_info()
+
+    def hold_current_pose(self) -> None:
+        """Cancel queued target motion at the current simulated joint pose."""
+
+        self.data.ctrl[:] = np.clip(
+            self.joint_positions,
+            self.joint_ranges[:, 0],
+            self.joint_ranges[:, 1],
+        )
+        self._previous_action.fill(0)
 
     def step(
         self, action: np.ndarray

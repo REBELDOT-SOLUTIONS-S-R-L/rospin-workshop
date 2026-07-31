@@ -13,6 +13,10 @@ import numpy as np
 from rospin_workshop.config import RuntimeConfig
 from rospin_workshop.env import ACTION_NAMES, CAMERA_NAMES, SO101WorkshopEnv
 from rospin_workshop.recorder import LeRobotV3Recorder
+from rospin_workshop.remote import (
+    SO101RemoteReader,
+    remote_positions_to_joint_targets,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -137,7 +141,12 @@ class PerspectiveCamera:
 
 
 class WorkshopController:
-    def __init__(self, config: RuntimeConfig) -> None:
+    def __init__(
+        self,
+        config: RuntimeConfig,
+        *,
+        remote_reader: SO101RemoteReader | None = None,
+    ) -> None:
         if config.camera_hz <= 0:
             raise ValueError("camera_hz must be positive")
         if config.camera_hz > config.control_hz:
@@ -151,6 +160,14 @@ class WorkshopController:
         self._jpeg_frames: dict[str, bytes] = {}
         self._keys: set[str] = set()
         self._gripper_command = 0.0
+        self._keyboard_enabled = True
+        self._control_mode_changed = False
+        self._active_control_source = "keyboard"
+        self._remote = remote_reader or SO101RemoteReader(
+            port=self.config.remote_port,
+            calibration_dir=self.config.remote_calibration_root,
+            poll_hz=self.config.remote_hz,
+        )
         self._perspective_camera = PerspectiveCamera()
         self._recorder: LeRobotV3Recorder | None = None
         self._last_dataset_path: Path | None = None
@@ -167,6 +184,9 @@ class WorkshopController:
             "dataset_path": None,
             "task": None,
             "keys": [],
+            "keyboard_enabled": True,
+            "active_control_source": "keyboard",
+            "remote": self._remote.status(),
             "eef_position": None,
             "eef_orientation": None,
             "joint_positions": None,
@@ -226,10 +246,13 @@ class WorkshopController:
         ]
 
     def start(self) -> None:
+        self._remote.start()
         self._thread.start()
         if not self._ready_event.wait(timeout=30):
+            self._remote.stop()
             raise RuntimeError("Simulation startup timed out")
         if self._error is not None:
+            self._remote.stop()
             raise RuntimeError(f"Simulation startup failed: {self._error}")
 
     def set_key(self, key: str, pressed: bool) -> None:
@@ -237,6 +260,13 @@ class WorkshopController:
         if key not in KEY_ACTIONS:
             return
         with self._lock:
+            if not self._keyboard_enabled:
+                self._keys.discard(key)
+                self._status_cache = {
+                    **self._status_cache,
+                    "keys": sorted(self._keys),
+                }
+                return
             if pressed:
                 self._keys.add(key)
                 if key == "[":
@@ -255,6 +285,24 @@ class WorkshopController:
             self._keys.clear()
             self._status_cache = {**self._status_cache, "keys": []}
 
+    def set_keyboard_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            enabled = bool(enabled)
+            if enabled != self._keyboard_enabled:
+                self._control_mode_changed = True
+            self._keyboard_enabled = enabled
+            self._keys.clear()
+            self._gripper_command = 0.0
+            self._active_control_source = (
+                "keyboard" if self._keyboard_enabled else "hold"
+            )
+            self._status_cache = {
+                **self._status_cache,
+                "keys": [],
+                "keyboard_enabled": self._keyboard_enabled,
+                "active_control_source": self._active_control_source,
+            }
+
     def control_perspective_camera(
         self,
         action: str,
@@ -272,12 +320,73 @@ class WorkshopController:
     def _current_action(self) -> np.ndarray:
         action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
         with self._lock:
+            if not self._keyboard_enabled:
+                return action
             keys = tuple(self._keys)
             gripper_command = self._gripper_command
         for key in keys:
             action += KEY_ACTIONS[key]
         action[-1] = gripper_command
         return np.clip(action, -1.0, 1.0)
+
+    def _step_control(self) -> np.ndarray:
+        if self.env is None:
+            raise RuntimeError("Simulation environment is not ready")
+        with self._lock:
+            keyboard_enabled = self._keyboard_enabled
+            control_mode_changed = self._control_mode_changed
+            self._control_mode_changed = False
+
+        if control_mode_changed:
+            self.env.hold_current_pose()
+
+        if keyboard_enabled:
+            action = self._current_action()
+            self._observation, _, _, _, _ = self.env.step_dynamics(action)
+            source = "keyboard"
+        else:
+            remote_positions = self._remote.latest_positions()
+            if remote_positions is None:
+                action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+                self._observation, _, _, _, _ = self.env.step_dynamics(action)
+                source = "hold"
+            else:
+                previous_targets = self.env.data.ctrl.copy()
+                targets = remote_positions_to_joint_targets(
+                    remote_positions,
+                    self.env.joint_ranges,
+                )
+                self._observation, _, _, _, _ = self.env.step_joint_targets(targets)
+                action = self._joint_target_action(
+                    previous_targets,
+                    self.env.data.ctrl,
+                )
+                source = "remote"
+
+        with self._lock:
+            self._active_control_source = source
+        return action
+
+    def _joint_target_action(
+        self,
+        previous_targets: np.ndarray,
+        next_targets: np.ndarray,
+    ) -> np.ndarray:
+        if self.env is None:
+            raise RuntimeError("Simulation environment is not ready")
+        action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+        action[3:8] = np.clip(
+            (np.asarray(next_targets[:5]) - np.asarray(previous_targets[:5]))
+            / self.env.joint_step,
+            -1.0,
+            1.0,
+        )
+        gripper_range = self.env.joint_ranges[-1]
+        gripper_fraction = (
+            float(next_targets[-1]) - gripper_range[0]
+        ) / np.ptp(gripper_range)
+        action[-1] = np.clip(2.0 * gripper_fraction - 1.0, -1.0, 1.0)
+        return action
 
     @staticmethod
     def _encode_image(camera: str, rgb: np.ndarray) -> bytes:
@@ -313,8 +422,7 @@ class WorkshopController:
             next_camera_tick = next_tick + camera_period
             while not self._stop_event.is_set():
                 self._process_commands()
-                action = self._current_action()
-                self._observation, _, _, _, _ = self.env.step_dynamics(action)
+                action = self._step_control()
                 self._collect_render_results()
 
                 now = time.monotonic()
@@ -610,6 +718,9 @@ class WorkshopController:
             "dataset_path": str(dataset_path) if dataset_path else None,
             "task": recorder.task if recorder else None,
             "keys": sorted(self._keys),
+            "keyboard_enabled": self._keyboard_enabled,
+            "active_control_source": self._active_control_source,
+            "remote": self._remote.status(),
             "eef_position": (
                 self.env.eef_position.round(4).tolist()
                 if self.env is not None
@@ -645,5 +756,6 @@ class WorkshopController:
 
     def close(self) -> None:
         self._stop_event.set()
+        self._remote.stop()
         if self._thread.is_alive():
             self._thread.join(timeout=30)

@@ -9,6 +9,11 @@ def _int_env(name: str, default: int) -> int:
     return int(os.environ.get(name, default))
 
 
+def _optional_env(name: str) -> str | None:
+    value = os.environ.get(name, "").strip()
+    return value or None
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     data_root: Path = Path(os.environ.get("ROSPIN_DATA_ROOT", "/workspace/data"))
@@ -18,6 +23,8 @@ class RuntimeConfig:
     camera_hz: int = _int_env("ROSPIN_CAMERA_HZ", 25)
     image_width: int = _int_env("ROSPIN_IMAGE_WIDTH", 480)
     image_height: int = _int_env("ROSPIN_IMAGE_HEIGHT", 270)
+    remote_port: str | None = _optional_env("ROSPIN_REMOTE_PORT")
+    remote_hz: int = _int_env("ROSPIN_REMOTE_HZ", 60)
 
     @property
     def datasets_root(self) -> Path:
@@ -26,3 +33,7 @@ class RuntimeConfig:
     @property
     def outputs_root(self) -> Path:
         return self.data_root / "outputs"
+
+    @property
+    def remote_calibration_root(self) -> Path:
+        return self.data_root / "calibration" / "remote"

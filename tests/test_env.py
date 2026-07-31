@@ -156,6 +156,37 @@ def test_gripper_commands_latch_full_joint_travel() -> None:
         env.close()
 
 
+def test_absolute_joint_targets_are_clipped_and_rate_limited() -> None:
+    env = SO101WorkshopEnv(render_mode=None, control_hz=50)
+    try:
+        env.reset()
+        before = env.data.ctrl.copy()
+        desired = env.joint_ranges[:, 1] + 10
+        env.step_joint_targets(desired)
+        target_delta = env.data.ctrl - before
+        np.testing.assert_allclose(
+            target_delta[:-1],
+            np.minimum(env.joint_step, env.joint_ranges[:-1, 1] - before[:-1]),
+            atol=1e-10,
+        )
+        assert target_delta[-1] <= env.gripper_step + 1e-10
+        assert np.all(env.data.ctrl <= env.joint_ranges[:, 1])
+    finally:
+        env.close()
+
+
+def test_hold_current_pose_cancels_absolute_target_motion() -> None:
+    env = SO101WorkshopEnv(render_mode=None)
+    try:
+        env.reset()
+        env.step_joint_targets(env.joint_ranges[:, 1])
+        assert not np.allclose(env.data.ctrl, env.joint_positions)
+        env.hold_current_pose()
+        np.testing.assert_allclose(env.data.ctrl, env.joint_positions)
+    finally:
+        env.close()
+
+
 def test_gymnasium_checker() -> None:
     env = SO101WorkshopEnv(image_width=64, image_height=48)
     try:

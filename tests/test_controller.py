@@ -14,6 +14,34 @@ from rospin_workshop.controller import (
 )
 from rospin_workshop.dataset_tools import inspect_dataset
 from rospin_workshop.env import ACTION_NAMES
+from rospin_workshop.env import SO101WorkshopEnv
+
+
+class FixedRemoteReader:
+    def __init__(self, positions: np.ndarray) -> None:
+        self.positions = positions
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def latest_positions(self) -> np.ndarray:
+        return self.positions.copy()
+
+    def status(self) -> dict[str, object]:
+        return {
+            "configured": True,
+            "port": "/dev/fake-so101",
+            "connected": True,
+            "calibrated": True,
+            "available": True,
+            "error": None,
+            "age_ms": 0,
+            "read_hz": 60.0,
+            "positions": None,
+        }
 
 
 def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
@@ -145,6 +173,49 @@ def test_keyboard_mapping_and_gripper_command_latching(tmp_path) -> None:
     controller.set_key("]", True)
     controller.set_key("]", False)
     assert controller._current_action()[-1] == 1
+    controller.set_keyboard_enabled(False)
+    controller.set_key("w", True)
+    assert controller.status()["keyboard_enabled"] is False
+    assert controller.status()["keys"] == []
+    np.testing.assert_array_equal(
+        controller._current_action(),
+        np.zeros(len(ACTION_NAMES), dtype=np.float32),
+    )
+
+
+def test_disabled_keyboard_uses_rate_limited_remote_joint_targets(tmp_path) -> None:
+    remote_positions = np.array([-5.0, -95.0, 90.0, 75.0, 5.0, 0.0])
+    remote = FixedRemoteReader(remote_positions)
+    controller = WorkshopController(
+        RuntimeConfig(data_root=tmp_path),
+        remote_reader=remote,  # type: ignore[arg-type]
+    )
+    env = SO101WorkshopEnv(render_mode=None)
+    controller.env = env
+    try:
+        env.reset()
+        controller.set_keyboard_enabled(False)
+        before = env.joint_positions.astype(np.float64)
+        action = controller._step_control()
+        after = env.data.ctrl.copy()
+
+        expected_direction = np.sign(
+            np.concatenate(
+                (
+                    np.deg2rad(remote_positions[:-1]),
+                    [env.joint_ranges[-1, 0]],
+                )
+            )
+            - before
+        )
+        np.testing.assert_array_equal(np.sign(after - before), expected_direction)
+        assert np.all(np.abs(after[:-1] - before[:-1]) <= env.joint_step + 1e-10)
+        assert abs(after[-1] - before[-1]) <= env.gripper_step + 1e-10
+        assert controller._active_control_source == "remote"
+        assert np.any(action[3:8])
+        assert -1.0 <= action[-1] <= 1.0
+    finally:
+        env.close()
 
 
 def test_perspective_camera_orbit_pan_zoom_and_reset(tmp_path) -> None:

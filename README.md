@@ -3,7 +3,7 @@
 A portable, browser-operated robotics workshop stack:
 
 - MuJoCo physics with a custom Gymnasium environment
-- Cartesian end-effector translation and direct-joint keyboard teleoperation
+- keyboard teleoperation plus optional physical SO-101 leader control
 - wrist camera observations and a movable perspective viewer
 - local LeRobot v3.0 episode recording
 - local ACT policy training through `lerobot-train`
@@ -100,6 +100,37 @@ keys synchronizes position targets to the current pose so the robot stops
 instead of finishing a queued motion. Gripper commands are absolute and
 latched: one press targets the corresponding joint limit and release does not
 interrupt the full open/close motion.
+
+### Physical SO-101 remote
+
+On the Linux workstation with the SO-101 leader at `/dev/ttyUSB0`, start the
+hardware-enabled stack with:
+
+```bash
+docker compose -f compose.yaml -f compose.remote.yaml up -d --build
+```
+
+The base `compose.yaml` deliberately contains no USB device mapping, so the
+same project still starts on workshop laptops that do not have the remote.
+`compose.remote.yaml` passes `/dev/ttyUSB0` into the container and sets
+`ROSPIN_REMOTE_PORT`.
+
+The app reads the leader's existing calibration directly from its six motor
+registers and immediately disables torque. It never launches LeRobot's
+interactive calibration flow. USB reads run on a separate thread and reconnect
+automatically, so an unplugged remote cannot stall MuJoCo or recording.
+
+The **Keyboard controls** switch in the Session status card selects the control
+mode:
+
+- On: keyboard commands control the simulation and remote readings are ignored.
+- Off: the simulation follows all six calibrated remote joints. If the remote
+  is disconnected or its data becomes stale, the simulation holds position.
+
+The status card shows `keyboard`, `remote`, or `hold` as the active source and
+reports the remote connection/read rate. Arm values are converted from degrees
+to MuJoCo radians; the remote gripper's calibrated 0–100 value maps across the
+simulated gripper range. Targets are rate-limited when changing modes.
 
 ## Record a local LeRobot v3 dataset
 
@@ -260,6 +291,8 @@ Set environment variables in `compose.yaml`:
 | `ROSPIN_IMAGE_WIDTH` | `480` | both camera widths; default is 16:9 |
 | `ROSPIN_IMAGE_HEIGHT` | `270` | both camera heights; default is 16:9 |
 | `ROSPIN_DATA_ROOT` | `/workspace/data` | datasets and training outputs |
+| `ROSPIN_REMOTE_PORT` | unset | optional SO-101 leader serial device |
+| `ROSPIN_REMOTE_HZ` | `60` | optional SO-101 leader polling rate |
 | `ROSPIN_SO101_ASSET_DIR` | auto-detected | vendored SO-101 URDF directory |
 | `MUJOCO_GL` | `osmesa` | CPU headless OpenGL backend |
 

@@ -74,6 +74,8 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
                     )
                 elif message_type == "clear_keys":
                     controller.clear_keys()
+                elif message_type == "keyboard_control":
+                    controller.set_keyboard_enabled(bool(message.get("enabled")))
                 elif message_type == "camera":
                     try:
                         controller.control_perspective_camera(
