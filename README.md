@@ -7,10 +7,32 @@ A portable, browser-operated robotics workshop stack:
 - wrist and fixed perspective camera observations
 - local LeRobot v3.0 episode recording
 - local ACT policy training through `lerobot-train`
-- one Docker workflow for Windows participants
+- one Docker workflow for Windows and macOS participants
 
-The browser is the user interface, so Windows machines do not need an X server,
-WSLg, Python, or a native MuJoCo installation.
+The browser is the only rendering and control interface. MuJoCo runs headlessly
+in Docker with OSMesa and streams both cameras to the page. Windows machines do
+not need an X server or WSLg, macOS machines do not need XQuartz, and neither
+platform needs Python or a native MuJoCo installation.
+
+## Start on macOS
+
+Install and start Docker Desktop, then run:
+
+```bash
+docker compose up --build
+```
+
+Open <http://localhost:8000>. Apple silicon uses the native `linux/arm64`
+image; Intel Macs use `linux/amd64`.
+
+The convenience script performs the same operation and follows the logs:
+
+```bash
+./scripts/workshop.sh start
+```
+
+Stop the stack with `docker compose down`. Recorded data remains under
+`data/datasets/` on the host.
 
 ## Start on Windows
 
