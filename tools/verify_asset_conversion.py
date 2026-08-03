@@ -325,12 +325,9 @@ def verify() -> dict:
         manifest["wrist_camera"]["vertical_fov_degrees"],
     ):
         raise AssertionError("Wrist camera FOV does not match its calibration")
-    physical_resolution = manifest["wrist_camera"]["physical_reference_resolution"]
     simulation_resolution = manifest["wrist_camera"]["simulation_resolution"]
-    if physical_resolution[0] * simulation_resolution[1] != (
-        simulation_resolution[0] * physical_resolution[1]
-    ):
-        raise AssertionError("Physical and simulated wrist-camera aspects differ")
+    if simulation_resolution != [640, 480]:
+        raise AssertionError("Workshop wrist-camera resolution must be 640x480")
     return {
         "scene": str(DEFAULT_SCENE),
         "robot_urdf": str(urdf_path),

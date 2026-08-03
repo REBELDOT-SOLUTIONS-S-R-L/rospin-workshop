@@ -58,8 +58,7 @@ jobs:
           with open("status.json", encoding="utf-8") as status_file:
               status = json.load(status_file)
           assert status["error"] is None, status
-          assert status["image_size"] == [320, 240], status
+          assert status["image_size"] == [640, 480], status
           assert len(status["joint_positions"]) == 6, status
           print(json.dumps(status, indent=2))
           PY
-

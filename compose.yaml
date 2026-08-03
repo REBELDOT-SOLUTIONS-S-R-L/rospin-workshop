@@ -15,5 +15,5 @@ services:
       ROSPIN_DATA_ROOT: /workspace/data
       ROSPIN_CONTROL_HZ: "60"
       ROSPIN_CAMERA_HZ: "25"
-      ROSPIN_IMAGE_WIDTH: "480"
-      ROSPIN_IMAGE_HEIGHT: "270"
+      ROSPIN_IMAGE_WIDTH: "640"
+      ROSPIN_IMAGE_HEIGHT: "480"

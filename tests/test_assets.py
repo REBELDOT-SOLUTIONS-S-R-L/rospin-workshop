@@ -27,6 +27,7 @@ def test_hugging_face_so101_assets_are_vendored() -> None:
     assert manifest["sources"]["robot_urdf"] == (
         "/assets/robots/so101/so101_new_calib.urdf"
     )
+    assert manifest["wrist_camera"]["simulation_resolution"] == [640, 480]
     mesh_files = sorted(path.name for path in (ROBOT_DIR / "assets").glob("*.stl"))
     assert mesh_files == manifest["robot"]["mesh_files"]
     assert all((ROBOT_DIR / "assets" / name).stat().st_size > 0 for name in mesh_files)

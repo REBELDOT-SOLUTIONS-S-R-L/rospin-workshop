@@ -32,7 +32,8 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 22px clamp(20px, 4vw, 54px);
+      min-height: 68px;
+      padding: 14px clamp(18px, 2vw, 34px);
       border-bottom: 1px solid #1d2a3a;
       background: #090d14cc;
       backdrop-filter: blur(16px);
@@ -51,18 +52,20 @@
     .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); box-shadow: 0 0 12px currentColor; }
     .dot.online { background: var(--green); }
     main {
-      max-width: 1500px;
-      margin: 0 auto;
-      padding: 24px clamp(18px, 4vw, 54px) 44px;
+      width: 100%;
+      padding: 18px clamp(14px, 1.5vw, 28px) 30px;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 330px;
-      gap: 22px;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
     }
     .views {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      min-width: 0;
+      grid-template-columns: repeat(2, 642px);
       gap: 18px;
       align-content: start;
+      justify-content: center;
     }
     .card {
       overflow: hidden;
@@ -78,8 +81,16 @@
     }
     .live { color: var(--cyan); font-size: 10px; }
     .camera {
-      display: block; width: 100%; aspect-ratio: 16 / 9;
+      display: block; width: 100%; aspect-ratio: 4 / 3;
       background: #06090d; object-fit: cover;
+    }
+    .perspective-card { width: 642px; min-width: 0; }
+    .perspective-card .camera-viewport { width: 100%; }
+    .wrist-card { width: 642px; justify-self: end; }
+    .wrist-camera { width: 640px; height: 480px; }
+    .camera-spec {
+      color: var(--muted); font-size: 10px; letter-spacing: .06em;
+      white-space: nowrap;
     }
     .camera-viewport {
       position: relative;
@@ -114,12 +125,14 @@
       pointer-events: none; backdrop-filter: blur(8px);
     }
     .teleop {
-      grid-column: 1 / -1;
       padding: 18px;
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 16px;
+      gap: 18px;
       outline: none;
+    }
+    .teleop .control-group + .control-group {
+      padding-left: 18px; border-left: 1px solid #263447;
     }
     .teleop:focus {
       border-color: var(--cyan);
@@ -139,7 +152,16 @@
     }
     kbd.active { border-color: var(--cyan); background: #164a4a; box-shadow: 0 0 16px #4de1d144; }
     .key-row { display: flex; align-items: center; gap: 9px; margin: 8px 0; color: var(--muted); font-size: 12px; }
-    aside { display: flex; flex-direction: column; gap: 18px; }
+    .bottom-panels {
+      position: static;
+      max-height: none;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      overflow: visible;
+      padding: 0;
+    }
+    .bottom-panels .teleop { grid-column: 1 / -1; }
     .side-content { padding: 18px; }
     label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; margin: 13px 0 7px; }
     input {
@@ -186,13 +208,26 @@
     dl { margin: 15px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; font-size: 12px; }
     dt { color: var(--muted); } dd { margin: 0; text-align: right; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
     .hint { color: var(--muted); font-size: 11px; line-height: 1.55; margin-top: 12px; }
-    @media (max-width: 1050px) {
-      main { grid-template-columns: 1fr; }
-      aside { display: grid; grid-template-columns: 1fr 1fr; }
+    @media (max-width: 1400px) {
+      .views { grid-template-columns: 642px; }
+      .wrist-card { justify-self: auto; }
+    }
+    @media (max-width: 900px) {
+      .bottom-panels { grid-template-columns: minmax(0, 1fr); }
     }
     @media (max-width: 720px) {
-      .views, aside, .teleop { grid-template-columns: 1fr; }
-      .teleop { grid-column: auto; }
+      header { align-items: flex-start; gap: 12px; }
+      .subtitle { display: none; }
+      .views, .bottom-panels, .teleop { grid-template-columns: minmax(0, 1fr); }
+      .perspective-card, .wrist-card, .wrist-camera {
+        width: 100%; height: auto;
+      }
+      .camera-title { gap: 10px; }
+      .camera-spec { white-space: normal; text-align: right; }
+      .teleop .control-group + .control-group {
+        padding-left: 0; padding-top: 16px;
+        border-left: 0; border-top: 1px solid #263447;
+      }
     }
   </style>
 </head>
@@ -210,8 +245,11 @@
 
   <main>
     <section class="views">
-      <article class="card">
-        <div class="camera-title"><span>Perspective · viewer only</span><span class="live">● live</span></div>
+      <article class="card perspective-card">
+        <div class="camera-title">
+          <span>Perspective · viewer only</span>
+          <span class="live">● live</span>
+        </div>
         <div id="perspectiveViewport" class="camera-viewport"
              aria-label="Movable perspective camera. Drag to orbit, Shift-drag to pan, and use the mouse wheel to zoom.">
           <img class="camera" src="/camera/perspective.mjpg"
@@ -225,19 +263,27 @@
           <div class="camera-help">drag orbit · Shift+drag pan · wheel zoom</div>
         </div>
       </article>
-      <article class="card">
-        <div class="camera-title"><span>Gripper camera · recorded</span><span class="live">● live</span></div>
-        <img class="camera" src="/camera/wrist.mjpg" alt="Gripper camera">
+      <article class="card wrist-card">
+        <div class="camera-title">
+          <span>Wrist camera · recorded</span>
+          <span class="camera-spec">640 × 480 · dataset source</span>
+        </div>
+        <img class="camera wrist-camera" src="/camera/wrist.mjpg"
+             alt="640 by 480 wrist camera" width="640" height="480">
       </article>
+    </section>
+
+    <aside id="controlRail" class="bottom-panels"
+           aria-label="Workshop controls and status">
       <article id="teleopPanel" class="card teleop" tabindex="0"
                aria-label="Keyboard teleoperation controls">
-        <div>
+        <div class="control-group">
           <h2>End-effector translation</h2>
           <div class="key-row"><kbd data-key="w">W</kbd><kbd data-key="s">S</kbd><span>−Y / +Y</span></div>
           <div class="key-row"><kbd data-key="a">A</kbd><kbd data-key="d">D</kbd><span>+X / −X</span></div>
           <div class="key-row"><kbd data-key="q">Q</kbd><kbd data-key="e">E</kbd><span>+Z / −Z</span></div>
         </div>
-        <div>
+        <div class="control-group">
           <h2>Direct joint rotation</h2>
           <div class="key-row"><kbd data-key="i">I</kbd><kbd data-key="k">K</kbd><span>wrist flex + / −</span></div>
           <div class="key-row"><kbd data-key="j">J</kbd><kbd data-key="l">L</kbd><span>wrist roll + / −</span></div>
@@ -245,16 +291,14 @@
           <div class="key-row"><kbd data-key="r">R</kbd><kbd data-key="f">F</kbd><span>shoulder lift + / −</span></div>
           <div class="key-row"><kbd data-key="t">T</kbd><kbd data-key="g">G</kbd><span>elbow flex + / −</span></div>
         </div>
-        <div>
+        <div class="control-group">
           <h2>Gripper</h2>
           <div class="key-row"><kbd data-key="[">[</kbd><span>close fully</span></div>
           <div class="key-row"><kbd data-key="]">]</kbd><span>open fully</span></div>
           <div id="keyboardHint" class="hint">Keyboard control ready. Click this panel after editing text. Multiple movement keys may be held together.</div>
         </div>
       </article>
-    </section>
 
-    <aside>
       <section class="card side-content">
         <h2>Local recording</h2>
         <label for="datasetName">Dataset name</label>
@@ -290,6 +334,7 @@
         <dl>
           <dt>Control source</dt><dd id="controlSource">keyboard</dd>
           <dt>SO-101 remote</dt><dd id="remoteStatus">checking…</dd>
+          <dt>Wrist recording</dt><dd id="recordingFormat">640 × 480 · 25 FPS</dd>
           <dt>Episode frames</dt><dd id="frames">0</dd>
           <dt>Saved episodes</dt><dd id="episodes">0</dd>
           <dt>EEF xyz</dt><dd id="eef">—</dd>
@@ -405,6 +450,9 @@
       document.querySelector("#eef").textContent = next.eef_position?.map(v => v.toFixed(3)).join(", ") || "—";
       document.querySelector("#eefQuat").textContent = next.eef_orientation?.map(v => v.toFixed(3)).join(", ") || "—";
       document.querySelector("#datasetPath").textContent = next.dataset_path || "not created";
+      document.querySelector("#recordingFormat").textContent = next.image_size
+        ? `${next.image_size[0]} × ${next.image_size[1]} · ${next.camera_hz} FPS`
+        : "640 × 480 · 25 FPS";
       const keyboardEnabled = next.keyboard_enabled !== false;
       keyboardToggle.checked = keyboardEnabled;
       teleopPanel.classList.toggle("keyboard-disabled", !keyboardEnabled);

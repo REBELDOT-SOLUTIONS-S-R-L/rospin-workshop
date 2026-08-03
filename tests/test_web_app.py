@@ -28,7 +28,23 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         assert 'id="cameraResetButton"' in page
         assert "drag orbit · Shift+drag pan · wheel zoom" in page
         assert "Perspective · viewer only" in page
-        assert "Gripper camera · recorded" in page
+        assert ".perspective-card { width: 642px;" in page
+        assert "grid-template-columns: repeat(2, 642px)" in page
+        assert "Wrist camera · recorded" in page
+        assert "640 × 480 · dataset source" in page
+        assert 'class="camera wrist-camera"' in page
+        assert 'width="640" height="480"' in page
+        views_start = page.index('<section class="views">')
+        views_end = page.index("</section>", views_start)
+        controls_start = page.index('<aside id="controlRail"')
+        teleop_start = page.index('id="teleopPanel"')
+        recording_start = page.index("Local recording")
+        status_start = page.index("Session status")
+        assert views_end < controls_start
+        assert controls_start < teleop_start < recording_start < status_start
+        assert 'id="controlRail" class="bottom-panels"' in page
+        assert "max-height: none" in page
+        assert "overflow: visible" in page
         assert 'id="keyboardToggle"' in page
         assert "Turn off to follow the physical SO-101 remote." in page
 

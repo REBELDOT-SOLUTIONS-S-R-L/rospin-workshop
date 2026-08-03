@@ -22,7 +22,7 @@
     "physical_reference_device": "/dev/video2",
     "physical_reference_format": "mjpeg",
     "physical_reference_resolution": [1280, 720],
-    "simulation_resolution": [480, 270]
+    "simulation_resolution": [640, 480]
   },
   "robot": {
     "joints": [

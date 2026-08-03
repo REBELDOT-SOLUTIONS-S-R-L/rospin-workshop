@@ -94,6 +94,11 @@ Shift-drag to pan, and use the mouse wheel or `+` / `−` buttons to zoom. Doubl
 click or select **Reset view** to return to the starting pose. The perspective
 camera is viewer-only: changing its pose never enters a recording.
 
+The camera workspace occupies the top of the page, with equally sized 640×480
+perspective and wrist views. The teleoperation, local-recording, and
+session-status cards sit below the camera workspace without internal scrolling.
+The wrist view is the only image written to the dataset.
+
 Full-scale held keys command at most 12 cm/s translation or 0.8 rad/s joint
 motion, independent of the configured control rate. Releasing all arm-control
 keys synchronizes position targets to the current pose so the robot stops
@@ -159,11 +164,12 @@ Every frame contains:
 | `action` | `(9,)` | translation, direct-joint rotation, and gripper command |
 
 Physics and keyboard input run at 60 Hz independently from two camera-specific
-render workers. The workers use separate software-rendering contexts so the
-wrist and perspective images are produced in parallel at 25 FPS. Only the
-wrist worker's frame is handed to the recorder; the movable perspective image
-remains a live browser view and is never included in the dataset. Each saved
-row combines state, action, and its wrist frame from the same 25 Hz simulation
+render workers. The workers use separate software-rendering contexts and are
+scheduled independently, keeping the recorded wrist stream at 25 FPS even when
+the larger perspective view takes longer to render. Only the wrist worker's
+frame is handed to the recorder; the movable perspective image remains a live
+browser view and is never included in the dataset. Each saved row combines
+state, action, and its 640×480 wrist frame from the same 25 Hz simulation
 snapshot; key transitions do not inject extra off-cadence rows. Both scene
 lights have shadows disabled and glossy material reflections are removed
 because their redundant software-rendering passes prevent reliable 25 Hz
@@ -265,8 +271,8 @@ and mesh poses. The verifier compiles the original URDF with MuJoCo's native
 importer and compares all link and visual transforms at three joint poses.
 The new URDF has no camera, so the wrist camera starts from the supplied camera
 USD orientation. Its final pose and 62° vertical field of view were calibrated
-against the physical `/dev/video2` MJPEG feed at 1280×720: the jaw midpoint
-aligns at the same slightly left-of-center position in the 16:9 simulated view.
+against the physical `/dev/video2` MJPEG feed at 1280×720. The workshop UI and
+every newly recorded wrist-camera video use the requested 640×480 resolution.
 
 To verify source/model synchronization:
 
@@ -287,17 +293,17 @@ Set environment variables in `compose.yaml`:
 | Variable | Default | Purpose |
 |---|---:|---|
 | `ROSPIN_CONTROL_HZ` | `60` | simulation physics and keyboard command rate |
-| `ROSPIN_CAMERA_HZ` | `25` | browser camera and dataset recording FPS |
-| `ROSPIN_IMAGE_WIDTH` | `480` | both camera widths; default is 16:9 |
-| `ROSPIN_IMAGE_HEIGHT` | `270` | both camera heights; default is 16:9 |
+| `ROSPIN_CAMERA_HZ` | `25` | wrist preview and dataset FPS; perspective is best-effort |
+| `ROSPIN_IMAGE_WIDTH` | `640` | wrist preview and recorded-video width |
+| `ROSPIN_IMAGE_HEIGHT` | `480` | wrist preview and recorded-video height |
 | `ROSPIN_DATA_ROOT` | `/workspace/data` | datasets and training outputs |
 | `ROSPIN_REMOTE_PORT` | unset | optional SO-101 leader serial device |
 | `ROSPIN_REMOTE_HZ` | `60` | optional SO-101 leader polling rate |
 | `ROSPIN_SO101_ASSET_DIR` | auto-detected | vendored SO-101 URDF directory |
 | `MUJOCO_GL` | `osmesa` | CPU headless OpenGL backend |
 
-Both ACT camera inputs must have the same resolution. Changing resolution
-creates a different dataset schema; do not change it midway through a dataset.
+The workshop wrist-video schema is 640×480. Changing these values creates a
+different dataset schema; do not change them midway through a dataset.
 
 ## Local development and tests
 

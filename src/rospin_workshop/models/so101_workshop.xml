@@ -173,7 +173,7 @@
                 <!-- Calibrated against the 1280x720 /dev/video2 feed: the
                      jaw midpoint matches its slightly left-of-center position. -->
                 <camera name="wrist"
-                        pos="0.0325 0.1 -0.0002876164"
+                        pos="0.0 0.1 -0.0002876164"
                         quat="0.9517752157 -0.3066331913 -0.0098696427 -0.0016170651"
                         fovy="62"/>
 

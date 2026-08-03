@@ -250,3 +250,32 @@ def test_perspective_camera_orbit_pan_zoom_and_reset(tmp_path) -> None:
     assert not controller._render_requested.is_set()
     controller.control_perspective_camera("orbit", {"dx": 10, "dy": 0})
     assert not controller._render_requested.is_set()
+
+
+def test_perspective_render_is_bounded_without_resizing_wrist(tmp_path) -> None:
+    controller = WorkshopController(
+        RuntimeConfig(
+            data_root=tmp_path,
+            image_width=640,
+            image_height=480,
+        )
+    )
+
+    assert controller._camera_render_size("wrist") == (640, 480)
+    assert controller._camera_render_size("perspective") == (480, 360)
+
+
+def test_wrist_render_can_be_submitted_while_perspective_is_busy(tmp_path) -> None:
+    controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
+    env = SO101WorkshopEnv(render_mode=None)
+    controller.env = env
+    try:
+        env.reset()
+        action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+
+        assert controller._submit_render("perspective", action) is True
+        assert controller._submit_render("wrist", action) is True
+        assert controller._submit_render("wrist", action) is False
+        assert controller._render_inflight == {"perspective", "wrist"}
+    finally:
+        env.close()

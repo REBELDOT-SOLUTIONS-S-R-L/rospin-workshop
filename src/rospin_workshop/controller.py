@@ -20,6 +20,8 @@ from rospin_workshop.remote import (
 
 LOGGER = logging.getLogger(__name__)
 
+PERSPECTIVE_MAX_RENDER_WIDTH = 480
+
 PERSPECTIVE_DEFAULT_POSITION = np.array([0.0, 0.72, 1.22], dtype=np.float64)
 PERSPECTIVE_DEFAULT_FORWARD = np.array(
     [0.0, -0.89898987, -0.43796942],
@@ -154,7 +156,8 @@ class WorkshopController:
         self.config = config
         # Each MuJoCo instance has one owner: the control thread advances
         # physics, while one worker per camera owns an independent OSMesa
-        # context. Both camera workers receive the same simulation snapshot.
+        # context. Camera work is scheduled independently so the viewer cannot
+        # delay the wrist frames handed to the recorder.
         self.env: SO101WorkshopEnv | None = None
         self._observation: dict[str, np.ndarray] | None = None
         self._jpeg_frames: dict[str, bytes] = {}
@@ -223,7 +226,7 @@ class WorkshopController:
                 BaseException | None,
             ]
         ] = queue.Queue()
-        self._render_inflight = False
+        self._render_inflight: set[str] = set()
         self._render_sequence = 0
         self._pending_renders: dict[int, dict[str, Any]] = {}
         self._render_requested = threading.Event()
@@ -407,7 +410,9 @@ class WorkshopController:
             self._observation, _ = self.env.reset()
             for render_thread in self._render_threads:
                 render_thread.start()
-            self._submit_render(np.zeros(len(ACTION_NAMES), dtype=np.float32))
+            startup_action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+            for camera in CAMERA_NAMES:
+                self._submit_render(camera, startup_action)
             startup_deadline = time.monotonic() + 30
             while self._render_inflight:
                 timeout = startup_deadline - time.monotonic()
@@ -427,17 +432,18 @@ class WorkshopController:
 
                 now = time.monotonic()
                 render_requested = self._render_requested.is_set()
-                if not self._render_inflight and (
-                    render_requested or now >= next_camera_tick
-                ):
-                    self._submit_render(action)
-                    self._render_requested.clear()
-                    if render_requested:
+                if render_requested:
+                    if not self._render_inflight:
+                        for camera in CAMERA_NAMES:
+                            self._submit_render(camera, action)
+                        self._render_requested.clear()
                         next_camera_tick = now + camera_period
-                    else:
-                        next_camera_tick += camera_period
-                        if next_camera_tick <= now:
-                            next_camera_tick = now + camera_period
+                elif now >= next_camera_tick:
+                    for camera in CAMERA_NAMES:
+                        self._submit_render(camera, action)
+                    next_camera_tick += camera_period
+                    if next_camera_tick <= now:
+                        next_camera_tick = now + camera_period
 
                 with self._lock:
                     self._refresh_status_locked()
@@ -471,10 +477,11 @@ class WorkshopController:
     def _render_loop(self, camera: str) -> None:
         render_env: SO101WorkshopEnv | None = None
         try:
+            image_width, image_height = self._camera_render_size(camera)
             render_env = SO101WorkshopEnv(
                 render_mode="rgb_array",
-                image_width=self.config.image_width,
-                image_height=self.config.image_height,
+                image_width=image_width,
+                image_height=image_height,
                 control_hz=self.config.control_hz,
             )
             while not self._stop_event.is_set():
@@ -512,9 +519,22 @@ class WorkshopController:
             if render_env is not None:
                 render_env.close()
 
-    def _submit_render(self, action: np.ndarray) -> None:
-        if self.env is None or self._render_inflight:
-            return
+    def _camera_render_size(self, camera: str) -> tuple[int, int]:
+        """Keep the recorded wrist feed native while bounding viewer render cost."""
+
+        if (
+            camera != "perspective"
+            or self.config.image_width <= PERSPECTIVE_MAX_RENDER_WIDTH
+        ):
+            return self.config.image_width, self.config.image_height
+        scale = PERSPECTIVE_MAX_RENDER_WIDTH / self.config.image_width
+        return PERSPECTIVE_MAX_RENDER_WIDTH, max(
+            1, round(self.config.image_height * scale)
+        )
+
+    def _submit_render(self, camera: str, action: np.ndarray) -> bool:
+        if self.env is None or camera in self._render_inflight:
+            return False
         recording_generation = (
             self._recording_generation
             if self._recorder is not None and self._recorder.recording
@@ -526,26 +546,27 @@ class WorkshopController:
         action_copy = np.asarray(action, dtype=np.float32).copy()
         self._pending_renders[sequence] = {
             "observation": {},
-            "cameras": set(),
             "recorded": False,
             "action": action_copy,
             "recording_generation": recording_generation,
             "epoch": self._render_epoch,
         }
-        with self._lock:
-            perspective_view = self._perspective_camera.view()
-        for camera in CAMERA_NAMES:
-            self._render_requests[camera].put_nowait(
-                (
-                    sequence,
-                    snapshot,
-                    action_copy,
-                    recording_generation,
-                    self._render_epoch,
-                    perspective_view if camera == "perspective" else None,
-                )
+        perspective_view = None
+        if camera == "perspective":
+            with self._lock:
+                perspective_view = self._perspective_camera.view()
+        self._render_requests[camera].put_nowait(
+            (
+                sequence,
+                snapshot,
+                action_copy,
+                recording_generation,
+                self._render_epoch,
+                perspective_view,
             )
-        self._render_inflight = True
+        )
+        self._render_inflight.add(camera)
+        return True
 
     def _collect_render_results(self) -> None:
         while True:
@@ -575,7 +596,6 @@ class WorkshopController:
         pending = self._pending_renders.get(sequence)
         if pending is None or observation is None or action is None:
             return
-        pending["cameras"].add(camera)
         if epoch == self._render_epoch:
             for name, value in observation.items():
                 if not name.startswith("observation.images."):
@@ -597,16 +617,13 @@ class WorkshopController:
             self._recorder.add_frame(pending["observation"], action)
             pending["recorded"] = True
 
-        if pending["cameras"] != set(CAMERA_NAMES):
-            return
-
         self._pending_renders.pop(sequence)
-        self._render_inflight = False
-        paired_observation = pending["observation"]
+        self._render_inflight.discard(camera)
+        camera_observation = pending["observation"]
         if epoch != self._render_epoch:
             return
         with self._lock:
-            self._observation = paired_observation
+            self._observation = camera_observation
             self._refresh_status_locked()
 
     def _process_commands(self) -> None:

@@ -21,8 +21,8 @@ class RuntimeConfig:
     port: int = _int_env("ROSPIN_PORT", 8000)
     control_hz: int = _int_env("ROSPIN_CONTROL_HZ", 60)
     camera_hz: int = _int_env("ROSPIN_CAMERA_HZ", 25)
-    image_width: int = _int_env("ROSPIN_IMAGE_WIDTH", 480)
-    image_height: int = _int_env("ROSPIN_IMAGE_HEIGHT", 270)
+    image_width: int = _int_env("ROSPIN_IMAGE_WIDTH", 640)
+    image_height: int = _int_env("ROSPIN_IMAGE_HEIGHT", 480)
     remote_port: str | None = _optional_env("ROSPIN_REMOTE_PORT")
     remote_hz: int = _int_env("ROSPIN_REMOTE_HZ", 60)
 
