@@ -22,6 +22,13 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         controller.start()
         try:
+            # A single-task workshop has no selection ambiguity. Initialize its
+            # MuJoCo environments and camera contexts before Uvicorn reports
+            # application startup complete, so that log line means the whole
+            # workshop—not only the HTTP socket—is ready.
+            only_task = controller.task_registry.only()
+            if only_task is not None:
+                await asyncio.to_thread(controller.select_task, only_task.id)
             yield
         finally:
             controller.close()

@@ -170,6 +170,29 @@ def test_compiled_link_and_mesh_poses_match_mujoco_urdf_importer() -> None:
         workshop_model.geom_size[table_id],
         [0.375, 0.375, 0.375],
     )
+    table_material_id = workshop_model.geom_matid[table_id]
+    np.testing.assert_allclose(
+        workshop_model.mat_rgba[table_material_id],
+        [1.0, 1.0, 1.0, 1.0],
+    )
+    assert workshop_model.mat_specular[table_material_id] == 0
+    assert workshop_model.mat_shininess[table_material_id] == 0
+    assert workshop_model.mat_reflectance[table_material_id] == 0
+    assert workshop_model.mat_emission[table_material_id] == 0.25
+
+    robot_material_id = mujoco.mj_name2id(
+        workshop_model,
+        mujoco.mjtObj.mjOBJ_MATERIAL,
+        "printed_yellow",
+    )
+    np.testing.assert_allclose(
+        workshop_model.mat_rgba[robot_material_id],
+        [248 / 255, 139 / 255, 23 / 255, 1.0],
+        atol=5e-8,
+    )
+    assert workshop_model.mat_specular[robot_material_id] == 0
+    assert workshop_model.mat_shininess[robot_material_id] == 0
+    assert workshop_model.mat_reflectance[robot_material_id] == 0
 
     for native_body_id in range(1, native_model.nbody):
         body_name = mujoco.mj_id2name(

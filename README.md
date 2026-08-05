@@ -148,6 +148,11 @@ opening the page without a query parameter selects it automatically. The first
 selected task is locked for the server session; restart the container before
 using a different task.
 
+For a single-task workshop, server startup eagerly creates the simulation and
+both camera renderers before logging `Application startup complete`. An already
+open browser tab also reclaims its task and restarts both streams automatically
+after a container restart; no manual refresh is required.
+
 Task definitions live under `tasks/` and are mounted read-only at
 `/workspace/tasks`. A task YAML selects reusable object catalogue entries,
 places their instances in world coordinates, optionally gives dynamic objects
@@ -306,7 +311,8 @@ The cube contact box matches its 25 mm visual volume exactly. The bowl uses
 inset cylindrical floor and wall proxies that remain inside its tapered visual
 shell.
 The ground and lights come from the scene USD; the table is centred at the
-scene origin and measures 0.75 m by 0.75 m. The checked-in robot collision
+scene origin, measures 0.75 m by 0.75 m, and renders neutral white. The SO-101's
+printed parts use `#F88B17`. The checked-in robot collision
 catalogue can be regenerated with `tools/generate_collision_boxes.py` after
 installing its offline geometry dependencies.
 URDF `rpy` values are extrinsic rotations, so the MJCF compiler deliberately

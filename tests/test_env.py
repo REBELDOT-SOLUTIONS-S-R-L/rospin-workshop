@@ -11,6 +11,7 @@ from rospin_workshop.env import (
     ACTION_NAMES,
     CAMERA_NAMES,
     DIRECT_JOINT_ACTIONS,
+    HOME_JOINT_POSITIONS,
     JOINT_NAMES,
     SO101WorkshopEnv,
 )
@@ -36,14 +37,20 @@ def test_environment_contract_and_cameras() -> None:
         assert info["eef_position"].shape == (3,)
         assert info["eef_orientation"].shape == (4,)
         np.testing.assert_allclose(
+            observation["observation.state"],
+            HOME_JOINT_POSITIONS,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
             np.linalg.norm(observation["observation.eef_orientation"]),
             1.0,
             atol=1e-5,
         )
-        # Reset must start over the table in a useful manipulation pose.
-        assert abs(info["eef_position"][0]) < 0.30
-        assert abs(info["eef_position"][1]) < 0.30
-        assert 0.80 < info["eef_position"][2] < 1.00
+        # Reset must start at tabletop height inside the configured cube
+        # workspace, ready to approach an object spawned there.
+        assert -0.15 <= info["eef_position"][0] <= 0.03
+        assert 0.07 <= info["eef_position"][1] <= 0.20
+        assert 0.7545 <= info["eef_position"][2] < 0.80
         assert env.model.nmesh == 13
         assert np.all(env.model.mat_reflectance == 0)
     finally:
@@ -138,6 +145,14 @@ def test_gripper_commands_latch_full_joint_travel() -> None:
     env = SO101WorkshopEnv(render_mode=None, control_hz=60)
     try:
         env.reset()
+        # The configured home pose rests the moving jaw on the tabletop. Lift
+        # clear before checking free-space gripper travel; contact should stop
+        # the real mechanism instead of being forced through the table.
+        for _ in range(30):
+            env.step_dynamics(_action(2))
+        env.step_dynamics(np.zeros(len(ACTION_NAMES), dtype=np.float32))
+        assert env.eef_position[2] > 0.80
+
         gripper_range = env.model.jnt_range[env._joint_ids[-1]]
         close = _action(-1, -1)
         env.step_dynamics(close)
@@ -150,7 +165,9 @@ def test_gripper_commands_latch_full_joint_travel() -> None:
         open_gripper = _action(-1)
         env.step_dynamics(open_gripper)
         assert env.data.ctrl[-1] == gripper_range[1]
-        for _ in range(120):
+        # The lower-force gripper needs more than two seconds to traverse its
+        # complete range from fully closed to fully open.
+        for _ in range(180):
             env.step_dynamics(idle)
         assert env.joint_positions[-1] > gripper_range[1] - 0.05
     finally:

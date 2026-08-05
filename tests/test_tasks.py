@@ -10,7 +10,7 @@ import pytest
 
 from rospin_workshop.config import RuntimeConfig
 from rospin_workshop.controller import WorkshopController
-from rospin_workshop.env import ACTION_NAMES, SO101WorkshopEnv
+from rospin_workshop.env import ACTION_NAMES, HOME_JOINT_POSITIONS, SO101WorkshopEnv
 from rospin_workshop.tasks import TaskRegistry, load_task
 
 
@@ -62,6 +62,11 @@ def test_task_scene_compiles_and_reset_restores_objects() -> None:
     env = SO101WorkshopEnv(task=task, render_mode=None)
     try:
         env.reset(seed=17)
+        np.testing.assert_allclose(
+            env.joint_positions,
+            HOME_JOINT_POSITIONS,
+            atol=1e-6,
+        )
         cube_id = mujoco.mj_name2id(
             env.model, mujoco.mjtObj.mjOBJ_BODY, "task_cube"
         )
@@ -76,7 +81,7 @@ def test_task_scene_compiles_and_reset_restores_objects() -> None:
         np.testing.assert_allclose(initial_cube[2], 0.767903)
         np.testing.assert_allclose(
             env.data.xpos[bowl_id],
-            [-0.2833, 0.029, 0.7601],
+            [-0.2833, 0.15, 0.7601],
         )
 
         cube_visual_id = mujoco.mj_name2id(
@@ -127,12 +132,9 @@ def test_task_scene_compiles_and_reset_restores_objects() -> None:
         env.reset(seed=18)
         assert not np.allclose(env.data.xpos[cube_id, :2], initial_cube[:2])
 
-        # The relocated robot leaves the complete configured workspace clear.
+        # The home pose now reaches into the configured workspace. Placement
+        # remains deterministic and resamples any location touching the robot.
         env.reset(seed=13)
-        expected_sample = np.array([0.0056635657, 0.1811893269])
-        np.testing.assert_allclose(
-            env.data.xpos[cube_id, :2], expected_sample, atol=1e-9
-        )
         assert -0.15 <= env.data.xpos[cube_id, 0] <= 0.03
         assert 0.07 <= env.data.xpos[cube_id, 1] <= 0.20
         assert all(

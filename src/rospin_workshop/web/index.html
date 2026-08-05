@@ -382,14 +382,29 @@
     let cameraDrag;
     let pendingCameraMotion;
     let cameraMotionTimer;
+    let taskClaimPromise;
+    let taskClaimPermanentlyFailed = false;
+
+    class PermanentTaskError extends Error {}
+
+    function restartCameraStreams() {
+      const generation = Date.now();
+      document.querySelectorAll("img[data-src]").forEach(camera => {
+        camera.removeAttribute("src");
+        camera.src = `${camera.dataset.src}?generation=${generation}`;
+      });
+    }
 
     async function claimTask() {
+      document.querySelector("#connectionText").textContent = "Initializing simulation";
       const availableResponse = await fetch("/api/tasks");
       if (!availableResponse.ok) throw new Error("Could not load workshop tasks");
       const available = await availableResponse.json();
       const requested = new URLSearchParams(location.search).get("task");
       const taskId = requested || (available.length === 1 ? available[0].id : null);
-      if (!taskId) throw new Error("This workshop link must include ?task=<task-id>");
+      if (!taskId) {
+        throw new PermanentTaskError("This workshop link must include ?task=<task-id>");
+      }
       const response = await fetch("/api/session/task", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -397,12 +412,45 @@
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        throw new Error(body.detail || `Could not select task ${taskId}`);
+        const message = body.detail || `Could not select task ${taskId}`;
+        if (response.status >= 400 && response.status < 500) {
+          throw new PermanentTaskError(message);
+        }
+        throw new Error(message);
       }
       updateStatus(await response.json());
-      document.querySelectorAll("img[data-src]").forEach(camera => {
-        camera.src = camera.dataset.src;
+      restartCameraStreams();
+      document.querySelector("#connectionText").textContent = "Connected";
+    }
+
+    function ensureTask() {
+      if (taskClaimPermanentlyFailed) return Promise.resolve();
+      if (taskClaimPromise) return taskClaimPromise;
+      taskClaimPromise = (async () => {
+        let retryDelay = 250;
+        while (true) {
+          try {
+            await claimTask();
+            return;
+          } catch (error) {
+            const message = document.querySelector("#message");
+            message.textContent = error.message;
+            if (error instanceof PermanentTaskError) {
+              taskClaimPermanentlyFailed = true;
+              message.classList.add("error");
+              document.querySelector("#connectionText").textContent = "Task error";
+              return;
+            }
+            message.classList.remove("error");
+            document.querySelector("#connectionText").textContent = "Waiting for simulation";
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+            retryDelay = Math.min(3000, retryDelay * 2);
+          }
+        }
+      })().finally(() => {
+        taskClaimPromise = undefined;
       });
+      return taskClaimPromise;
     }
 
     function focusTeleop() {
@@ -420,6 +468,7 @@
       socket.onopen = () => {
         document.querySelector("#connectionDot").classList.add("online");
         document.querySelector("#connectionText").textContent = "Connected";
+        ensureTask();
         if (document.activeElement === document.body) focusTeleop();
       };
       socket.onclose = () => {
@@ -595,7 +644,8 @@
       const dy = event.clientY - cameraDrag.y;
       cameraDrag.x = event.clientX;
       cameraDrag.y = event.clientY;
-      queueCameraMotion(cameraDrag.action, dx, dy);
+      const direction = cameraDrag.action === "orbit" ? -1 : 1;
+      queueCameraMotion(cameraDrag.action, direction * dx, direction * dy);
     });
     function stopCameraDrag(event) {
       if (!cameraDrag || event.pointerId !== cameraDrag.pointerId) return;
@@ -635,17 +685,14 @@
     setInterval(async () => {
       try {
         const response = await fetch("/api/status");
-        updateStatus(await response.json());
+        if (!response.ok) throw new Error("Status request failed");
+        const next = await response.json();
+        updateStatus(next);
+        if (!next.task_ready) ensureTask();
       } catch (_) {}
     }, 500);
-    claimTask()
-      .then(connect)
-      .catch(error => {
-        document.querySelector("#connectionText").textContent = "Task error";
-        const message = document.querySelector("#message");
-        message.textContent = error.message;
-        message.classList.add("error");
-      });
+    connect();
+    ensureTask();
   </script>
 </body>
 </html>

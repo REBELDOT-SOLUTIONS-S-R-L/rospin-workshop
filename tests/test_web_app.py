@@ -50,9 +50,16 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         assert "overflow: visible" in page
         assert 'id="keyboardToggle"' in page
         assert "Turn off to follow the physical SO-101 remote." in page
+        assert "Initializing simulation" in page
+        assert "Waiting for simulation" in page
+        assert "retryDelay = Math.min(3000, retryDelay * 2)" in page
+        assert "if (!next.task_ready) ensureTask()" in page
+        assert 'cameraDrag.action === "orbit" ? -1 : 1' in page
+        assert "direction * dx, direction * dy" in page
 
-        waiting = client.get("/api/status").json()
-        assert waiting["task_ready"] is False
+        ready = client.get("/api/status").json()
+        assert ready["task_ready"] is True
+        assert ready["task_id"] == "cube_in_bowl"
         tasks = client.get("/api/tasks").json()
         assert [task["id"] for task in tasks] == ["cube_in_bowl"]
         selected = client.post(

@@ -47,8 +47,10 @@
     <texture name="ground_grid" type="2d" builtin="checker"
              rgb1="0.19 0.22 0.25" rgb2="0.11 0.13 0.15" width="512" height="512"/>
     <material name="ground" texture="ground_grid" texrepeat="8 8" reflectance="0.08"/>
-    <material name="table" rgba="0.32 0.34 0.37 1" reflectance="0.12"/>
-    <material name="printed_yellow" rgba="1.0 0.82 0.12 1" reflectance="0.16"/>
+    <material name="table" rgba="1 1 1 1" emission="0.25"
+              specular="0" shininess="0" reflectance="0"/>
+    <material name="printed_yellow" rgba="0.97254902 0.54509804 0.09019608 1"
+              specular="0" shininess="0" reflectance="0"/>
     <material name="servo_black" rgba="0.1 0.1 0.1 1" reflectance="0.08"/>
 
     <mesh name="base_motor_holder" file="base_motor_holder_so101_v1.stl"/>
@@ -212,7 +214,7 @@
   <keyframe>
     <!-- A nonsingular tabletop pose with the gripper and wrist camera aimed
          into the usable workspace. -->
-    <key name="home" qpos="0 -0.7651 0.7632 0.6437 -2.2143 0.65"
-         ctrl="0 -0.7651 0.7632 0.6437 -2.2143 0.65"/>
+    <key name="home" qpos="0 -1.6580628 1.5707963 1.2217305 -1.5707963 0.2617994"
+         ctrl="0 -1.6580628 1.5707963 1.2217305 -1.5707963 0.2617994"/>
   </keyframe>
 </mujoco>
