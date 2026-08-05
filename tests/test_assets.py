@@ -13,6 +13,7 @@ from rospin_workshop.env import JOINT_NAMES
 
 ROOT = Path(__file__).resolve().parents[1]
 ROBOT_DIR = ROOT / "assets/robots/so101"
+OBJECT_DIR = ROOT / "assets/objects"
 URDF_PATH = ROBOT_DIR / "so101_new_calib.urdf"
 MJCF_PATH = ROOT / "src/rospin_workshop/models/so101_workshop.xml"
 
@@ -33,6 +34,45 @@ def test_hugging_face_so101_assets_are_vendored() -> None:
     mesh_files = sorted(path.name for path in (ROBOT_DIR / "assets").glob("*.stl"))
     assert mesh_files == manifest["robot"]["mesh_files"]
     assert all((ROBOT_DIR / "assets" / name).stat().st_size > 0 for name in mesh_files)
+
+
+def test_usd_derived_task_object_assets_are_vendored() -> None:
+    manifest = json.loads(
+        (OBJECT_DIR / "object_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["schema_version"] == 1
+    assert set(manifest["objects"]) == {"cube_green", "oala_cuburi"}
+    expected = {
+        "cube_green": {
+            "source": "cubes/cube_green.usd",
+            "source_sha256": (
+                "5c1ad51bba5e3db6e04c9b083c727e4bcf89c947ea4798fa17318f7a8dabfdc1"
+            ),
+            "bounds_m": [[-0.0125, -0.0125, -0.0125], [0.0125, 0.0125, 0.0125]],
+            "triangles": 12,
+        },
+        "oala_cuburi": {
+            "source": "Oala cuburi.usd",
+            "source_sha256": (
+                "bf80a38d982eafc425147129fa8d7471588fa42f1dd4d3540bae5f977c18837c"
+            ),
+            "bounds_m": [
+                [-0.0875, -0.087458504, 0.0],
+                [0.0875, 0.087458504, 0.09],
+            ],
+            "triangles": 762,
+        },
+    }
+    for name, values in expected.items():
+        entry = manifest["objects"][name]
+        assert entry["source"] == values["source"]
+        assert entry["source_sha256"] == values["source_sha256"]
+        assert entry["bounds_m"] == values["bounds_m"]
+        assert entry["triangles"] == values["triangles"]
+        generated = OBJECT_DIR / entry["generated"]
+        assert hashlib.sha256(generated.read_bytes()).hexdigest() == entry[
+            "generated_sha256"
+        ]
 
 
 def test_every_urdf_visual_is_rendered_with_its_stl_and_transform() -> None:
@@ -94,7 +134,7 @@ def test_compiled_link_and_mesh_poses_match_mujoco_urdf_importer() -> None:
     )
     np.testing.assert_allclose(
         workshop_model.body_pos[robot_mount_id],
-        [0.0, 0.23, 0.7545030483],
+        [0.0, 0.35, 0.7545030483],
     )
     expected_mount_quaternion = np.array(
         [np.sqrt(0.5), 0.0, 0.0, -np.sqrt(0.5)]
@@ -108,7 +148,7 @@ def test_compiled_link_and_mesh_poses_match_mujoco_urdf_importer() -> None:
     )
     np.testing.assert_allclose(
         workshop_model.cam_pos[perspective_id],
-        [0.0, 0.72, 1.22],
+        [0.2, 1.0, 1.38],
     )
     perspective_rotation = np.empty(9)
     mujoco.mju_quat2Mat(
@@ -116,9 +156,20 @@ def test_compiled_link_and_mesh_poses_match_mujoco_urdf_importer() -> None:
         workshop_model.cam_quat[perspective_id],
     )
     perspective_forward = -perspective_rotation.reshape(3, 3)[:, 2]
-    assert abs(perspective_forward[0]) < 1e-8
+    assert perspective_forward[0] < 0
     assert perspective_forward[1] < 0
     assert perspective_forward[2] < 0
+
+    table_id = mujoco.mj_name2id(
+        workshop_model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        "table",
+    )
+    np.testing.assert_allclose(workshop_model.geom_pos[table_id, :2], [0.0, 0.0])
+    np.testing.assert_allclose(
+        workshop_model.geom_size[table_id],
+        [0.375, 0.375, 0.375],
+    )
 
     for native_body_id in range(1, native_model.nbody):
         body_name = mujoco.mj_id2name(

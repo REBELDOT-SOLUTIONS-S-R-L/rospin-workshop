@@ -1,0 +1,50 @@
+{
+  "objects": {
+    "cube_green": {
+      "applied_scale": 1.0,
+      "bounds_m": [
+        [
+          -0.0125,
+          -0.0125,
+          -0.0125
+        ],
+        [
+          0.0125,
+          0.0125,
+          0.0125
+        ]
+      ],
+      "generated": "cube_green.obj",
+      "generated_sha256": "79c9373d734bedf78fdaefeb099eafd91f6372caacb44d6113be691803a17e89",
+      "mass_kg": 0.019999999552965164,
+      "source": "cubes/cube_green.usd",
+      "source_prim": "/Cube",
+      "source_sha256": "5c1ad51bba5e3db6e04c9b083c727e4bcf89c947ea4798fa17318f7a8dabfdc1",
+      "triangles": 12
+    },
+    "oala_cuburi": {
+      "applied_scale": 0.001,
+      "bounds_m": [
+        [
+          -0.0875,
+          -0.087458504,
+          0.0
+        ],
+        [
+          0.0875,
+          0.087458504,
+          0.09
+        ]
+      ],
+      "generated": "oala_cuburi.obj",
+      "generated_sha256": "63cb43fd69d2895d25afb278d6921aff52f7d3685e09a9ebb594b835d41bc939",
+      "mass_kg": null,
+      "source": "Oala cuburi.usd",
+      "source_prim": "/World/node_/mesh_",
+      "source_sha256": "bf80a38d982eafc425147129fa8d7471588fa42f1dd4d3540bae5f977c18837c",
+      "triangles": 762
+    }
+  },
+  "schema_version": 1,
+  "source_root": "/home/roboticslab/IsaacTools/IsaacTasks/single_so101_cubes_leisaac/source/single_so101_cubes_leisaac/single_so101_cubes_leisaac/assets/objects"
+}

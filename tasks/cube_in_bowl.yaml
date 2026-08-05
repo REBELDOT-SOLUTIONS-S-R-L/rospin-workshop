@@ -1,19 +1,22 @@
 schema_version: 1
 id: cube_in_bowl
-title: Put the cube in the bowl
-instruction: Pick up the red cube and place it inside the blue bowl.
+title: Put the green cube in the bowl
+instruction: Pick up the green cube and place it inside the black bowl.
 
 objects:
   - name: cube
-    catalog_id: cube_40mm_red
+    catalog_id: cube_green_usd
     pose:
-      position: [0.10, -0.02, 0.7744]
+      position: [-0.06, 0.135, 0.767903]
       quaternion: [1, 0, 0, 0]
+    spawn:
+      x: [-0.15, 0.03]
+      y: [0.07, 0.20]
 
   - name: bowl
-    catalog_id: bowl_120mm_blue
+    catalog_id: bowl_oala_usd
     pose:
-      position: [-0.10, -0.08, 0.7544]
+      position: [-0.2833, 0.029, 0.7601]
       quaternion: [1, 0, 0, 0]
 
 success:
@@ -33,4 +36,4 @@ episode:
   timeout_seconds: 20
 
 dataset:
-  description: Put the red cube into the blue bowl
+  description: Put the green cube into the black bowl

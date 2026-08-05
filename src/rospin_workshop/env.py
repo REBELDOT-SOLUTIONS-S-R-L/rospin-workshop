@@ -67,6 +67,23 @@ def _so101_asset_dir() -> Path:
     )
 
 
+def _workshop_object_dir() -> Path:
+    candidates = [
+        Path(__file__).resolve().parents[2] / "assets/objects",
+        Path("/assets/objects"),
+        Path("/workspace/assets/objects"),
+    ]
+    for candidate in candidates:
+        if (candidate / "cube_green.obj").is_file() and (
+            candidate / "oala_cuburi.obj"
+        ).is_file():
+            return candidate
+    searched = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(
+        f"Could not locate the vendored workshop object meshes; searched: {searched}"
+    )
+
+
 class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
     """MuJoCo/Gymnasium environment with Cartesian translation and joint rotation.
 
@@ -132,6 +149,11 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             model_xml = compose_robot_collisions(model_xml)
             if self.task is not None:
                 model_xml = compose_task_model(model_xml, self.task)
+                object_dir = escape(
+                    str(_workshop_object_dir()),
+                    {'"': "&quot;"},
+                )
+                model_xml = model_xml.replace("WORKSHOP_OBJECT_DIR", object_dir)
             self.model = mujoco.MjModel.from_xml_string(model_xml)
         else:
             self.model = mujoco.MjModel.from_xml_path(str(Path(model_path)))
@@ -604,6 +626,36 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             mujoco.mj_resetData(self.model, self.data)
             self.data.qpos[self._qpos_indices] = HOME_JOINT_POSITIONS
             self.data.ctrl[:] = HOME_JOINT_POSITIONS
+            for instance in self.task.objects:
+                if instance.spawn is None:
+                    continue
+                body_id = self._task_body_ids[instance.name]
+                joint_id = int(self.model.body_jntadr[body_id])
+                qpos_address = int(self.model.jnt_qposadr[joint_id])
+                dof_address = int(self.model.jnt_dofadr[joint_id])
+                for _ in range(128):
+                    position = np.asarray(
+                        instance.pose.position, dtype=np.float64
+                    )
+                    position[0] = self.np_random.uniform(*instance.spawn.x)
+                    position[1] = self.np_random.uniform(*instance.spawn.y)
+                    self.data.qpos[qpos_address : qpos_address + 3] = position
+                    self.data.qvel[dof_address : dof_address + 6] = 0
+                    mujoco.mj_forward(self.model, self.data)
+                    if not any(
+                        body_id
+                        in (
+                            self.model.geom_bodyid[contact.geom1],
+                            self.model.geom_bodyid[contact.geom2],
+                        )
+                        for contact in self.data.contact
+                    ):
+                        break
+                else:
+                    raise RuntimeError(
+                        f"Could not place {instance.name!r} without contact "
+                        "after 128 workspace samples"
+                    )
         else:
             home_key = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_KEY, "home"

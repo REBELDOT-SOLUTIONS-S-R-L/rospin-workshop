@@ -4,11 +4,13 @@
     "robot_bucket": "hf://buckets/lerobot/robot-urdfs",
     "robot_urdf": "/assets/robots/so101/so101_new_calib.urdf",
     "robot_meshes": "/assets/robots/so101/assets",
-    "robot_camera": "/assets/robots/SO-101_follower/so101_wrist_mount/so101_wrist_mount_sdf_gripper_right_camera.usda"
+    "robot_camera": "/assets/robots/SO-101_follower/so101_wrist_mount/so101_wrist_mount_sdf_gripper_right_camera.usda",
+    "task_cube": "/home/roboticslab/IsaacTools/IsaacTasks/single_so101_cubes_leisaac/source/single_so101_cubes_leisaac/single_so101_cubes_leisaac/assets/objects/cubes/cube_green.usd",
+    "task_bowl": "/home/roboticslab/IsaacTools/IsaacTasks/single_so101_cubes_leisaac/source/single_so101_cubes_leisaac/single_so101_cubes_leisaac/assets/objects/Oala cuburi.usd"
   },
   "scene": {
     "ground_bbox": [[-25.0, -25.0, 0.0], [25.0, 25.0, 0.0]],
-    "table_bbox": [[-0.37, -0.37, 0.004403048259138287], [0.37, 0.37, 0.7544030482591383]],
+    "table_bbox": [[-0.375, -0.375, 0.004403048259138287], [0.375, 0.375, 0.7544030482591383]],
     "lights": [
       [0.08527694016750109, 0.07633769438952098, 5.057547369645484],
       [-2.494342298467515, 0.0, 3.663119197846747]
@@ -48,7 +50,7 @@
       "wrist_roll_follower_so101_v1.stl",
       "wrist_roll_pitch_so101_v2.stl"
     ],
-    "mount_position": [0.0, 0.23, 0.7545030483],
+    "mount_position": [0.0, 0.35, 0.7545030483],
     "mount_orientation_euler_xyz": [0.0, 0.0, -1.5707963267948966],
     "home_joint_positions": [0.0, -0.7651, 0.7632, 0.6437, -2.2143, 0.65]
   }

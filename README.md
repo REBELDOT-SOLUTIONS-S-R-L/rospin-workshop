@@ -88,8 +88,9 @@ arm. This follows LeIsaac's separation of Cartesian IK and direct SO-101 joint
 control while retaining the requested three-axis Cartesian translation keys.
 
 The robot mount faces 90 degrees toward world −Y, into the usable half of the
-table. The perspective viewer starts directly behind it on the +Y side,
-elevated and aimed down at the workspace. Drag the perspective image to orbit,
+table. The perspective viewer starts behind it on the +Y side, offset to keep
+the relocated robot and task objects in frame and aimed down at the workspace.
+Drag the perspective image to orbit,
 Shift-drag to pan, and use the mouse wheel or `+` / `−` buttons to zoom. Double
 click or select **Reset view** to return to the starting pose. The perspective
 camera is viewer-only: changing its pose never enters a recording.
@@ -149,12 +150,14 @@ using a different task.
 
 Task definitions live under `tasks/` and are mounted read-only at
 `/workspace/tasks`. A task YAML selects reusable object catalogue entries,
-places their instances in world coordinates, and defines its success and
-timeout rules. Restarting the container reloads YAML changes without rebuilding
-the image. The cube task automatically saves after the released, settled cube
-remains fully inside the bowl for two seconds. A 20-second timeout discards the
-attempt. Both outcomes reset the scene and wait for another **Start episode**.
-Manual save and discard remain available.
+places their instances in world coordinates, optionally gives dynamic objects
+an X/Y spawn range, and defines its success and timeout rules. The cube is
+sampled on every reset from X `[−0.15, 0.03]` and Y `[0.07, 0.20]`, with its
+height fixed on the tabletop. Restarting the container reloads YAML changes
+without rebuilding the image. The cube task automatically saves after the
+released, settled cube remains fully inside the bowl for two seconds. A
+20-second timeout discards the attempt. Both outcomes reset the scene and wait
+for another **Start episode**. Manual save and discard remain available.
 
 Task YAML cannot contain arbitrary MJCF or file paths. A new task needs only a
 YAML file when all required catalogue objects and success predicates already
@@ -288,11 +291,24 @@ All 17 URDF visual instances use their real STL mesh, material, link, and
 origin transform. Joint frames, axes, inertials, and limits also come from the
 URDF. Robot contact uses generated 2 mm boxes that are fully contained inside
 each rendered STL solid; this preserves concave gaps without allowing a hidden
-collision proxy to extend outside the visible robot. Task objects use their
-rendered primitives directly for contact. The ground, table, and lights come
-from the scene USD. The checked-in collision catalogue can be regenerated with
-`tools/generate_collision_boxes.py` after installing its offline geometry
-dependencies.
+collision proxy to extend outside the visible robot. The cube-task visuals are
+derived from the exact `cube_green.usd` and `Oala cuburi.usd` source meshes
+under the IsaacTasks `assets/objects` directory. Because MuJoCo does not load
+USD directly, deterministic OBJ copies and their source hashes are checked in
+under `assets/objects/`; regenerate or verify them with:
+
+```bash
+python tools/convert_task_usd_objects.py
+python tools/convert_task_usd_objects.py --check
+```
+
+The cube contact box matches its 25 mm visual volume exactly. The bowl uses
+inset cylindrical floor and wall proxies that remain inside its tapered visual
+shell.
+The ground and lights come from the scene USD; the table is centred at the
+scene origin and measures 0.75 m by 0.75 m. The checked-in robot collision
+catalogue can be regenerated with `tools/generate_collision_boxes.py` after
+installing its offline geometry dependencies.
 URDF `rpy` values are extrinsic rotations, so the MJCF compiler deliberately
 uses uppercase `XYZ`; lowercase `xyz` is intrinsic and produces incorrect link
 and mesh poses. The verifier compiles the original URDF with MuJoCo's native

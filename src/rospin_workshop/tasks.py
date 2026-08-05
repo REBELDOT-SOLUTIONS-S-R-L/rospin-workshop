@@ -21,10 +21,17 @@ class Pose:
 
 
 @dataclass(frozen=True)
+class SpawnWorkspace:
+    x: tuple[float, float]
+    y: tuple[float, float]
+
+
+@dataclass(frozen=True)
 class TaskObject:
     name: str
     catalog_id: str
     pose: Pose
+    spawn: SpawnWorkspace | None
 
 
 @dataclass(frozen=True)
@@ -62,11 +69,11 @@ class ObjectCatalogEntry:
 
 
 OBJECT_CATALOG: dict[str, ObjectCatalogEntry] = {
-    "cube_40mm_red": ObjectCatalogEntry(
+    "cube_green_usd": ObjectCatalogEntry(
         dynamic=True,
-        half_extents=(0.02, 0.02, 0.02),
+        half_extents=(0.0125, 0.0125, 0.0125),
     ),
-    "bowl_120mm_blue": ObjectCatalogEntry(dynamic=False),
+    "bowl_oala_usd": ObjectCatalogEntry(dynamic=False),
 }
 
 
@@ -125,17 +132,41 @@ def _parse_pose(value: Any, context: str) -> Pose:
     )
 
 
+def _parse_spawn_workspace(value: Any, context: str) -> SpawnWorkspace:
+    workspace = _mapping(value, context)
+    _only_keys(workspace, {"x", "y"}, context)
+    x = _vector(workspace.get("x"), 2, f"{context}.x")
+    y = _vector(workspace.get("y"), 2, f"{context}.y")
+    if x[0] >= x[1]:
+        raise ValueError(f"{context}.x minimum must be less than its maximum")
+    if y[0] >= y[1]:
+        raise ValueError(f"{context}.y minimum must be less than its maximum")
+    return SpawnWorkspace(x=(x[0], x[1]), y=(y[0], y[1]))
+
+
 def _parse_object(value: Any, index: int) -> TaskObject:
     context = f"objects[{index}]"
     item = _mapping(value, context)
-    _only_keys(item, {"name", "catalog_id", "pose"}, context)
+    _only_keys(item, {"name", "catalog_id", "pose", "spawn"}, context)
     name = _required_string(item, "name", context)
     if not TASK_ID_PATTERN.fullmatch(name):
         raise ValueError(f"{context}.name must use lowercase letters, digits, and underscores")
     catalog_id = _required_string(item, "catalog_id", context)
     if catalog_id not in OBJECT_CATALOG:
         raise ValueError(f"{context}.catalog_id references unknown object {catalog_id!r}")
-    return TaskObject(name=name, catalog_id=catalog_id, pose=_parse_pose(item.get("pose"), f"{context}.pose"))
+    spawn = (
+        _parse_spawn_workspace(item["spawn"], f"{context}.spawn")
+        if "spawn" in item
+        else None
+    )
+    if spawn is not None and not OBJECT_CATALOG[catalog_id].dynamic:
+        raise ValueError(f"{context}.spawn requires a dynamic catalogue object")
+    return TaskObject(
+        name=name,
+        catalog_id=catalog_id,
+        pose=_parse_pose(item.get("pose"), f"{context}.pose"),
+        spawn=spawn,
+    )
 
 
 def _parse_condition(value: Any, index: int, object_names: set[str]) -> SuccessCondition:
@@ -275,14 +306,29 @@ def _cube_body(instance: TaskObject) -> ET.Element:
         body,
         "geom",
         {
+            "name": f"task_{instance.name}_visual",
+            "type": "mesh",
+            "mesh": "task_cube_green_mesh",
+            "material": "task_cube_green",
+            "contype": "0",
+            "conaffinity": "0",
+            "group": "1",
+            "mass": "0",
+        },
+    )
+    ET.SubElement(
+        body,
+        "geom",
+        {
             "name": f"task_{instance.name}_geom",
             "type": "box",
-            "size": "0.02 0.02 0.02",
-            "mass": "0.04",
+            "size": "0.0125 0.0125 0.0125",
+            "mass": "0.02",
             "friction": "1.2 0.02 0.002",
-            "rgba": "0.9 0.08 0.06 1",
+            "rgba": "0 0 0 0",
             "contype": "1",
             "conaffinity": "1",
+            "group": "4",
         },
     )
     return body
@@ -298,11 +344,28 @@ def _bowl_body(instance: TaskObject) -> ET.Element:
         },
     )
     common = {
-        "material": "task_bowl_blue",
         "contype": "1",
         "conaffinity": "1",
         "friction": "1.0 0.01 0.001",
+        "rgba": "0 0 0 0",
+        "group": "4",
     }
+    ET.SubElement(
+        body,
+        "geom",
+        {
+            "name": f"task_{instance.name}_visual",
+            "type": "mesh",
+            "mesh": "task_bowl_oala_mesh",
+            "material": "task_bowl_black",
+            "contype": "0",
+            "conaffinity": "0",
+            "group": "1",
+        },
+    )
+
+    # The bowl floor occupies z=0..3 mm and tapers from 70 mm to 67.5 mm.
+    # Keep this contact cylinder inset from both rendered faces and its edge.
     ET.SubElement(
         body,
         "geom",
@@ -310,25 +373,37 @@ def _bowl_body(instance: TaskObject) -> ET.Element:
             **common,
             "name": f"task_{instance.name}_base",
             "type": "cylinder",
-            "pos": "0 0 0.004",
-            "size": "0.066 0.004",
+            "pos": "0 0 0.0015",
+            "size": "0.0665 0.0013",
         },
     )
-    segments = 20
-    radius = 0.061
-    half_length = math.pi * radius / segments * 1.08
+
+    # The USD bowl is a 3 mm thick tapered shell. These cylinders follow its
+    # wall centreline, inset from the visual surfaces and both rims, so contact
+    # geometry never extends beyond the rendered mesh.
+    segments = 128
+    bottom_radius = 0.0693483
+    top_radius = 0.0856784
+    bottom_height = 0.0045
+    top_height = 0.0885
     for index in range(segments):
         angle = 2 * math.pi * index / segments
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
         ET.SubElement(
             body,
             "geom",
             {
                 **common,
                 "name": f"task_{instance.name}_wall_{index}",
-                "type": "box",
-                "pos": f"{radius * math.cos(angle):.9g} {radius * math.sin(angle):.9g} 0.027",
-                "euler": f"0 0 {angle + math.pi / 2:.9g}",
-                "size": f"{half_length:.9g} 0.006 0.027",
+                "type": "cylinder",
+                "fromto": (
+                    f"{bottom_radius * cosine:.9g} "
+                    f"{bottom_radius * sine:.9g} {bottom_height:.9g} "
+                    f"{top_radius * cosine:.9g} "
+                    f"{top_radius * sine:.9g} {top_height:.9g}"
+                ),
+                "size": "0.0011",
             },
         )
     ET.SubElement(
@@ -337,8 +412,8 @@ def _bowl_body(instance: TaskObject) -> ET.Element:
         {
             "name": f"task_{instance.name}__interior",
             "type": "cylinder",
-            "pos": "0 0 0.03",
-            "size": "0.054 0.026",
+            "pos": "0 0 0.0265",
+            "size": "0.07 0.0335",
             "rgba": "0.1 0.5 1 0.08",
             "group": "3",
         },
@@ -352,12 +427,40 @@ def compose_task_model(base_xml: str, task: TaskDefinition) -> str:
     worldbody = root.find("worldbody")
     if asset is None or worldbody is None:
         raise ValueError("Base MuJoCo model is missing asset or worldbody")
-    if asset.find("material[@name='task_bowl_blue']") is None:
-        ET.SubElement(asset, "material", {"name": "task_bowl_blue", "rgba": "0.08 0.32 0.9 1"})
+    if asset.find("material[@name='task_cube_green']") is None:
+        ET.SubElement(
+            asset,
+            "material",
+            {"name": "task_cube_green", "rgba": "0.05 0.8 0.05 1"},
+        )
+    if asset.find("material[@name='task_bowl_black']") is None:
+        ET.SubElement(
+            asset,
+            "material",
+            {"name": "task_bowl_black", "rgba": "0.035 0.035 0.04 1"},
+        )
+    if asset.find("mesh[@name='task_cube_green_mesh']") is None:
+        ET.SubElement(
+            asset,
+            "mesh",
+            {
+                "name": "task_cube_green_mesh",
+                "file": "WORKSHOP_OBJECT_DIR/cube_green.obj",
+            },
+        )
+    if asset.find("mesh[@name='task_bowl_oala_mesh']") is None:
+        ET.SubElement(
+            asset,
+            "mesh",
+            {
+                "name": "task_bowl_oala_mesh",
+                "file": "WORKSHOP_OBJECT_DIR/oala_cuburi.obj",
+            },
+        )
 
     builders = {
-        "cube_40mm_red": _cube_body,
-        "bowl_120mm_blue": _bowl_body,
+        "cube_green_usd": _cube_body,
+        "bowl_oala_usd": _bowl_body,
     }
     for instance in task.objects:
         worldbody.append(builders[instance.catalog_id](instance))

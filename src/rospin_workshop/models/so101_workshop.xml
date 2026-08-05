@@ -67,11 +67,12 @@
   </asset>
 
   <worldbody>
-    <!-- scene.usd: ground spans 50 m and table bbox is 0.74 x 0.74 x 0.75 m -->
+    <!-- The 0.75 x 0.75 m table is centred at scene X/Y zero. Its source
+         height and tabletop elevation remain unchanged. -->
     <geom name="ground_plane" type="plane" size="25 25 0.1" material="ground"
           contype="1" conaffinity="2"/>
     <geom name="table" type="box" pos="0 0 0.3794030483"
-          size="0.37 0.37 0.375" material="table" contype="1" conaffinity="2"/>
+          size="0.375 0.375 0.375" material="table" contype="1" conaffinity="2"/>
 
     <light name="key_light" pos="0.08527694 0.07633769 5.05754737"
            dir="0 0 -1" diffuse="0.85 0.85 0.85" castshadow="false"/>
@@ -79,16 +80,16 @@
            dir="0.707107 0 -0.707107" diffuse="0.55 0.55 0.55"
            castshadow="false"/>
 
-    <!-- Third-person camera centered directly behind the -Y-facing arm,
-         elevated and pitched down toward its tabletop workspace. -->
-    <camera name="perspective" pos="0 0.72 1.22"
-            xyaxes="-1 0 0 0 -0.43796942 0.89898987"
+    <!-- Third-person camera pulled back and offset so the relocated arm and
+         both task objects remain visible in the initial workshop view. -->
+    <camera name="perspective" pos="0.2 1 1.38"
+            xyaxes="-0.955157326174 0.296098771114 0 -0.143488561987 -0.46286632899 0.874737557251"
             fovy="48"/>
 
     <!-- Mount the URDF base toward the back edge and face it 90 degrees
          clockwise, into the usable -Y half of the table. Keeping this scene
          transform outside base_link preserves every source-URDF transform. -->
-    <body name="robot_mount" pos="0 0.23 0.7545030483"
+    <body name="robot_mount" pos="0 0.35 0.7545030483"
           euler="0 0 -1.5707963267948966">
     <body name="base_link">
       <geom class="visual" mesh="base_motor_holder" material="printed_yellow"
