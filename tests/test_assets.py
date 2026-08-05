@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from rospin_workshop.collision import compose_robot_collisions
 from rospin_workshop.env import JOINT_NAMES
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -199,3 +201,81 @@ def test_urdf_and_mjcf_joint_limits_match() -> None:
             ],
             atol=1e-5,
         )
+
+
+def test_robot_collision_geometry_is_inset_and_visual_meshes_do_not_collide() -> None:
+    workshop_xml = MJCF_PATH.read_text(encoding="utf-8").replace(
+        "SO101_MESH_DIR", str(ROBOT_DIR / "assets")
+    )
+    model = mujoco.MjModel.from_xml_string(compose_robot_collisions(workshop_xml))
+    robot_bodies = {
+        "base_link",
+        "shoulder_link",
+        "upper_arm_link",
+        "lower_arm_link",
+        "wrist_link",
+        "gripper_link",
+        "moving_jaw_so101_v1_link",
+    }
+
+    visual_ids: list[int] = []
+    collision_ids: list[int] = []
+    for body_name in robot_bodies:
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        body_geoms = np.flatnonzero(model.geom_bodyid == body_id)
+        assert len(body_geoms) > 0
+        for geom_id in body_geoms:
+            if model.geom_group[geom_id] == 1:
+                assert model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_MESH
+                assert model.geom_contype[geom_id] == 0
+                assert model.geom_conaffinity[geom_id] == 0
+                visual_ids.append(int(geom_id))
+            elif model.geom_group[geom_id] == 4:
+                assert model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_BOX
+                assert model.geom_contype[geom_id] == 2
+                assert model.geom_conaffinity[geom_id] == 1
+                assert model.geom_margin[geom_id] == 0
+                assert model.geom_rgba[geom_id, 3] == 0
+                collision_ids.append(int(geom_id))
+            else:
+                raise AssertionError(f"Unexpected robot geom group: {geom_id}")
+
+    catalogue = json.loads(
+        (ROOT / "src/rospin_workshop/models/so101_collision_boxes.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    source = ET.fromstring(workshop_xml)
+    expected_collisions = sum(
+        len(catalogue["meshes"][geom.attrib["mesh"]]["boxes"])
+        for geom in source.findall(".//geom[@class='visual']")
+    )
+    assert len(visual_ids) == 17
+    assert len(collision_ids) == expected_collisions
+    assert len(collision_ids) > len(visual_ids)
+
+
+def test_collision_catalogue_matches_the_rendered_stl_assets() -> None:
+    catalogue = json.loads(
+        (ROOT / "src/rospin_workshop/models/so101_collision_boxes.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert catalogue["schema_version"] == 1
+    assert catalogue["pitch_m"] == 0.002
+    source_meshes = {
+        mesh.attrib["name"]: mesh.attrib["file"]
+        for mesh in ET.parse(MJCF_PATH).getroot().findall("./asset/mesh")
+    }
+    assert set(catalogue["meshes"]) == set(source_meshes)
+
+    for name, filename in source_meshes.items():
+        entry = catalogue["meshes"][name]
+        path = ROBOT_DIR / "assets" / filename
+        assert entry["source"] == filename
+        assert entry["source_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert entry["boxes"]
+        for box in entry["boxes"]:
+            assert len(box["center"]) == 3
+            assert len(box["half_size"]) == 3
+            assert all(value >= catalogue["pitch_m"] / 2 for value in box["half_size"])

@@ -104,7 +104,9 @@ motion, independent of the configured control rate. Releasing all arm-control
 keys synchronizes position targets to the current pose so the robot stops
 instead of finishing a queued motion. Gripper commands are absolute and
 latched: one press targets the corresponding joint limit and release does not
-interrupt the full open/close motion.
+interrupt the full open/close motion. The target is not shortened for a
+particular object size; an explicit 0.08 N·m actuator-force cap lets contact
+stop the jaw gently at the width of the object being grasped.
 
 ### Physical SO-101 remote
 
@@ -136,6 +138,27 @@ The status card shows `keyboard`, `remote`, or `hold` as the active source and
 reports the remote connection/read rate. Arm values are converted from degrees
 to MuJoCo radians; the remote gripper's calibrated 0–100 value maps across the
 simulated gripper range. Targets are rate-limited when changing modes.
+
+## Select a workshop task
+
+Open the cube task directly at
+<http://localhost:8000/?task=cube_in_bowl>. When only one task is installed,
+opening the page without a query parameter selects it automatically. The first
+selected task is locked for the server session; restart the container before
+using a different task.
+
+Task definitions live under `tasks/` and are mounted read-only at
+`/workspace/tasks`. A task YAML selects reusable object catalogue entries,
+places their instances in world coordinates, and defines its success and
+timeout rules. Restarting the container reloads YAML changes without rebuilding
+the image. The cube task automatically saves after the released, settled cube
+remains fully inside the bowl for two seconds. A 20-second timeout discards the
+attempt. Both outcomes reset the scene and wait for another **Start episode**.
+Manual save and discard remain available.
+
+Task YAML cannot contain arbitrary MJCF or file paths. A new task needs only a
+YAML file when all required catalogue objects and success predicates already
+exist; a genuinely new mechanism first needs a reusable catalogue entry.
 
 ## Record a local LeRobot v3 dataset
 
@@ -263,8 +286,13 @@ MuJoCo loads the checked-in MJCF scene at
 
 All 17 URDF visual instances use their real STL mesh, material, link, and
 origin transform. Joint frames, axes, inertials, and limits also come from the
-URDF. Only invisible collision primitives are simplified for stable,
-lightweight CPU contact. The ground, table, and lights come from the scene USD.
+URDF. Robot contact uses generated 2 mm boxes that are fully contained inside
+each rendered STL solid; this preserves concave gaps without allowing a hidden
+collision proxy to extend outside the visible robot. Task objects use their
+rendered primitives directly for contact. The ground, table, and lights come
+from the scene USD. The checked-in collision catalogue can be regenerated with
+`tools/generate_collision_boxes.py` after installing its offline geometry
+dependencies.
 URDF `rpy` values are extrinsic rotations, so the MJCF compiler deliberately
 uses uppercase `XYZ`; lowercase `xyz` is intrinsic and produces incorrect link
 and mesh poses. The verifier compiles the original URDF with MuJoCo's native
@@ -297,6 +325,7 @@ Set environment variables in `compose.yaml`:
 | `ROSPIN_IMAGE_WIDTH` | `640` | wrist preview and recorded-video width |
 | `ROSPIN_IMAGE_HEIGHT` | `480` | wrist preview and recorded-video height |
 | `ROSPIN_DATA_ROOT` | `/workspace/data` | datasets and training outputs |
+| `ROSPIN_TASKS_DIR` | `/workspace/tasks` | read-only task YAML directory |
 | `ROSPIN_REMOTE_PORT` | unset | optional SO-101 leader serial device |
 | `ROSPIN_REMOTE_HZ` | `60` | optional SO-101 leader polling rate |
 | `ROSPIN_SO101_ASSET_DIR` | auto-detected | vendored SO-101 URDF directory |

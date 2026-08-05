@@ -17,10 +17,16 @@ from rospin_workshop.remote import (
     SO101RemoteReader,
     remote_positions_to_joint_targets,
 )
+from rospin_workshop.tasks import TaskDefinition, TaskRegistry
 
 LOGGER = logging.getLogger(__name__)
 
-PERSPECTIVE_MAX_RENDER_WIDTH = 480
+PERSPECTIVE_MAX_RENDER_WIDTH = 640
+
+
+class TaskSessionConflictError(RuntimeError):
+    pass
+
 
 PERSPECTIVE_DEFAULT_POSITION = np.array([0.0, 0.72, 1.22], dtype=np.float64)
 PERSPECTIVE_DEFAULT_FORWARD = np.array(
@@ -148,12 +154,15 @@ class WorkshopController:
         config: RuntimeConfig,
         *,
         remote_reader: SO101RemoteReader | None = None,
+        task_registry: TaskRegistry | None = None,
     ) -> None:
         if config.camera_hz <= 0:
             raise ValueError("camera_hz must be positive")
         if config.camera_hz > config.control_hz:
             raise ValueError("camera_hz cannot exceed control_hz")
         self.config = config
+        self.task_registry = task_registry or TaskRegistry(config.tasks_root)
+        self._selected_task: TaskDefinition | None = None
         # Each MuJoCo instance has one owner: the control thread advances
         # physics, while one worker per camera owns an independent OSMesa
         # context. Camera work is scheduled independently so the viewer cannot
@@ -174,11 +183,13 @@ class WorkshopController:
         self._perspective_camera = PerspectiveCamera()
         self._recorder: LeRobotV3Recorder | None = None
         self._last_dataset_path: Path | None = None
-        self._message = "Ready"
+        self._episode_started_at: float | None = None
+        self._last_episode_outcome: str | None = None
+        self._message = "Waiting for task selection"
         self._error: str | None = None
         self._lock = threading.RLock()
         self._status_cache: dict[str, Any] = {
-            "message": "Starting simulation",
+            "message": "Waiting for task selection",
             "error": None,
             "recording": False,
             "finalized": False,
@@ -186,6 +197,16 @@ class WorkshopController:
             "episodes": 0,
             "dataset_path": None,
             "task": None,
+            "task_ready": False,
+            "task_id": None,
+            "task_title": None,
+            "task_instruction": None,
+            "task_success": False,
+            "task_success_progress": 0.0,
+            "task_success_hold_seconds": None,
+            "episode_elapsed_seconds": None,
+            "episode_timeout_seconds": None,
+            "last_episode_outcome": None,
             "keys": [],
             "keyboard_enabled": True,
             "active_control_source": "keyboard",
@@ -194,6 +215,7 @@ class WorkshopController:
             "eef_orientation": None,
             "joint_positions": None,
             "joint_targets": None,
+            "gripper_force_nm": None,
             "sim_time": None,
             "control_hz": self.config.control_hz,
             "camera_hz": self.config.camera_hz,
@@ -401,24 +423,6 @@ class WorkshopController:
 
     def _control_loop(self) -> None:
         try:
-            self.env = SO101WorkshopEnv(
-                render_mode=None,
-                image_width=self.config.image_width,
-                image_height=self.config.image_height,
-                control_hz=self.config.control_hz,
-            )
-            self._observation, _ = self.env.reset()
-            for render_thread in self._render_threads:
-                render_thread.start()
-            startup_action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
-            for camera in CAMERA_NAMES:
-                self._submit_render(camera, startup_action)
-            startup_deadline = time.monotonic() + 30
-            while self._render_inflight:
-                timeout = startup_deadline - time.monotonic()
-                if timeout <= 0:
-                    raise TimeoutError("Initial camera rendering timed out")
-                self._consume_render_result(self._render_results.get(timeout=timeout))
             self._ready_event.set()
 
             period = 1.0 / self.config.control_hz
@@ -427,8 +431,16 @@ class WorkshopController:
             next_camera_tick = next_tick + camera_period
             while not self._stop_event.is_set():
                 self._process_commands()
+                if self.env is None:
+                    with self._lock:
+                        self._refresh_status_locked()
+                    self._stop_event.wait(0.01)
+                    next_tick = time.monotonic()
+                    next_camera_tick = next_tick + camera_period
+                    continue
                 action = self._step_control()
                 self._collect_render_results()
+                self._update_episode_lifecycle()
 
                 now = time.monotonic()
                 render_requested = self._render_requested.is_set()
@@ -477,8 +489,11 @@ class WorkshopController:
     def _render_loop(self, camera: str) -> None:
         render_env: SO101WorkshopEnv | None = None
         try:
+            if self._selected_task is None:
+                raise RuntimeError("Render worker started without a selected task")
             image_width, image_height = self._camera_render_size(camera)
             render_env = SO101WorkshopEnv(
+                task=self._selected_task,
                 render_mode="rgb_array",
                 image_width=image_width,
                 image_height=image_height,
@@ -660,20 +675,112 @@ class WorkshopController:
         if "error" in response:
             raise response["error"]
 
+    def tasks(self) -> list[dict[str, Any]]:
+        return self.task_registry.list()
+
+    def select_task(self, task_id: str) -> None:
+        task = self.task_registry.get(task_id)
+        self.command("select_task", {"task": task})
+
+    def _initialize_task(self, task: TaskDefinition) -> None:
+        if self.env is not None:
+            raise TaskSessionConflictError(
+                f"Task session is already locked to {self._selected_task.id!r}"
+            )
+        self._selected_task = task
+        try:
+            self.env = SO101WorkshopEnv(
+                task=task,
+                render_mode=None,
+                image_width=self.config.image_width,
+                image_height=self.config.image_height,
+                control_hz=self.config.control_hz,
+            )
+            self._observation, _ = self.env.reset()
+            for render_thread in self._render_threads:
+                render_thread.start()
+            startup_action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+            for camera in CAMERA_NAMES:
+                self._submit_render(camera, startup_action)
+            startup_deadline = time.monotonic() + 30
+            while self._render_inflight:
+                timeout = startup_deadline - time.monotonic()
+                if timeout <= 0:
+                    raise TimeoutError("Initial camera rendering timed out")
+                self._consume_render_result(self._render_results.get(timeout=timeout))
+        except Exception:
+            if self.env is not None:
+                self.env.close()
+            self.env = None
+            self._selected_task = None
+            raise
+        self._message = f"Task ready: {task.title}"
+
+    def _reset_task_environment(self) -> None:
+        if self.env is None:
+            raise RuntimeError("Select a task before resetting the simulation")
+        with self._lock:
+            self._keys.clear()
+            self._gripper_command = 0.0
+        self._observation, _ = self.env.reset()
+        self._render_epoch += 1
+        self._render_requested.set()
+
+    def _complete_episode(self, *, save: bool, outcome: str) -> int:
+        recorder = self._require_recorder(recording=True)
+        frames = recorder.stop_episode(save=save)
+        self._recording_generation += 1
+        self._episode_started_at = None
+        self._last_episode_outcome = outcome
+        self._reset_task_environment()
+        verb = "Saved" if save else "Discarded"
+        self._message = f"{verb} episode with {frames} frames ({outcome})"
+        return frames
+
+    def _update_episode_lifecycle(self) -> None:
+        if (
+            self.env is None
+            or self._selected_task is None
+            or self._recorder is None
+            or not self._recorder.recording
+            or self._episode_started_at is None
+        ):
+            return
+        task_status = self.env.task_status() or {}
+        if bool(task_status.get("success")):
+            self._complete_episode(save=True, outcome="success")
+            return
+        if (
+            time.monotonic() - self._episode_started_at
+            >= self._selected_task.timeout_seconds
+        ):
+            self._complete_episode(save=False, outcome="timeout")
+
     def _execute_command(self, command: str, payload: dict[str, Any]) -> None:
         try:
             self._error = None
-            if command == "reset":
+            if command == "select_task":
+                task = payload.get("task")
+                if not isinstance(task, TaskDefinition):
+                    raise ValueError("select_task requires a validated task")
+                if self._selected_task is not None:
+                    if self._selected_task.id != task.id:
+                        raise TaskSessionConflictError(
+                            "This server is already locked to task "
+                            f"{self._selected_task.id!r}; restart it to select another"
+                        )
+                    self._message = f"Task ready: {task.title}"
+                else:
+                    self._initialize_task(task)
+            elif command == "reset":
                 if self._recorder is not None and self._recorder.recording:
                     raise RuntimeError("Stop or discard the recording before reset")
-                with self._lock:
-                    self._keys.clear()
-                    self._gripper_command = 0.0
-                self._observation, _ = self.env.reset()
-                self._render_epoch += 1
-                self._render_requested.set()
+                self._reset_task_environment()
+                self._last_episode_outcome = "reset"
                 self._message = "Simulation reset"
             elif command == "start_recording":
+                if self._selected_task is None:
+                    raise RuntimeError("Select a task before recording")
                 if self._recorder is None or self._recorder.finalized:
                     self._recorder = LeRobotV3Recorder(
                         datasets_root=self.config.datasets_root,
@@ -681,23 +788,20 @@ class WorkshopController:
                         image_width=self.config.image_width,
                         image_height=self.config.image_height,
                     )
+                self._reset_task_environment()
                 self._recording_generation += 1
                 self._recorder.start_episode(
                     dataset_name=str(payload.get("dataset_name", "so101_session")),
-                    task=str(payload.get("task", "")),
+                    task=self._selected_task.dataset_description,
                 )
+                self._episode_started_at = time.monotonic()
+                self._last_episode_outcome = None
                 self._render_requested.set()
                 self._message = "Recording episode"
             elif command == "stop_recording":
-                recorder = self._require_recorder(recording=True)
-                frames = recorder.stop_episode(save=True)
-                self._recording_generation += 1
-                self._message = f"Saved episode with {frames} frames"
+                self._complete_episode(save=True, outcome="manual_save")
             elif command == "discard_recording":
-                recorder = self._require_recorder(recording=True)
-                frames = recorder.stop_episode(save=False)
-                self._recording_generation += 1
-                self._message = f"Discarded {frames} frames"
+                self._complete_episode(save=False, outcome="manual_discard")
             elif command == "finish_dataset":
                 recorder = self._require_recorder(recording=False)
                 if recorder.num_episodes < 1 and not recorder.recording:
@@ -725,6 +829,13 @@ class WorkshopController:
             if recorder is not None and recorder.dataset_path is not None
             else self._last_dataset_path
         )
+        selected_task = self._selected_task
+        task_status = self.env.task_status() if self.env is not None else None
+        episode_elapsed = (
+            max(0.0, time.monotonic() - self._episode_started_at)
+            if self._episode_started_at is not None
+            else None
+        )
         self._status_cache = {
             "message": self._message,
             "error": self._error,
@@ -734,6 +845,26 @@ class WorkshopController:
             "episodes": recorder.num_episodes if recorder else 0,
             "dataset_path": str(dataset_path) if dataset_path else None,
             "task": recorder.task if recorder else None,
+            "task_ready": self.env is not None and selected_task is not None,
+            "task_id": selected_task.id if selected_task else None,
+            "task_title": selected_task.title if selected_task else None,
+            "task_instruction": selected_task.instruction if selected_task else None,
+            "task_success": bool(task_status and task_status["success"]),
+            "task_success_progress": (
+                round(float(task_status["success_progress"]), 3)
+                if task_status
+                else 0.0
+            ),
+            "task_success_hold_seconds": (
+                selected_task.success_hold_seconds if selected_task else None
+            ),
+            "episode_elapsed_seconds": (
+                round(episode_elapsed, 2) if episode_elapsed is not None else None
+            ),
+            "episode_timeout_seconds": (
+                selected_task.timeout_seconds if selected_task else None
+            ),
+            "last_episode_outcome": self._last_episode_outcome,
             "keys": sorted(self._keys),
             "keyboard_enabled": self._keyboard_enabled,
             "active_control_source": self._active_control_source,
@@ -755,6 +886,11 @@ class WorkshopController:
             ),
             "joint_targets": (
                 self.env.data.ctrl.round(4).tolist()
+                if self.env is not None
+                else None
+            ),
+            "gripper_force_nm": (
+                round(float(self.env.data.actuator_force[-1]), 4)
                 if self.env is not None
                 else None
             ),

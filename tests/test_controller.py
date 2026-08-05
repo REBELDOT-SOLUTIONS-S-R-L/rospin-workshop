@@ -56,6 +56,7 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
     )
     controller.start()
     try:
+        controller.select_task("cube_in_bowl")
         start_y = controller.status()["eef_position"][1]
         controller.set_key("w", True)
         time.sleep(0.5)
@@ -252,7 +253,7 @@ def test_perspective_camera_orbit_pan_zoom_and_reset(tmp_path) -> None:
     assert not controller._render_requested.is_set()
 
 
-def test_perspective_render_is_bounded_without_resizing_wrist(tmp_path) -> None:
+def test_perspective_and_wrist_render_at_configured_size(tmp_path) -> None:
     controller = WorkshopController(
         RuntimeConfig(
             data_root=tmp_path,
@@ -262,7 +263,7 @@ def test_perspective_render_is_bounded_without_resizing_wrist(tmp_path) -> None:
     )
 
     assert controller._camera_render_size("wrist") == (640, 480)
-    assert controller._camera_render_size("perspective") == (480, 360)
+    assert controller._camera_render_size("perspective") == (640, 480)
 
 
 def test_wrist_render_can_be_submitted_while_perspective_is_busy(tmp_path) -> None:

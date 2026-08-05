@@ -208,6 +208,14 @@
     dl { margin: 15px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; font-size: 12px; }
     dt { color: var(--muted); } dd { margin: 0; text-align: right; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
     .hint { color: var(--muted); font-size: 11px; line-height: 1.55; margin-top: 12px; }
+    .task-summary {
+      margin-bottom: 15px; padding: 13px; border: 1px solid #2d4663;
+      border-radius: 11px; background: #0b1623;
+    }
+    .task-name { color: var(--cyan); font-size: 14px; font-weight: 800; }
+    .task-instruction { margin-top: 6px; color: #d4e1ef; font-size: 12px; line-height: 1.5; }
+    .progress-track { height: 7px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: #253247; }
+    .progress-fill { width: 0; height: 100%; background: var(--cyan); transition: width .12s linear; }
     @media (max-width: 1400px) {
       .views { grid-template-columns: 642px; }
       .wrist-card { justify-self: auto; }
@@ -252,7 +260,7 @@
         </div>
         <div id="perspectiveViewport" class="camera-viewport"
              aria-label="Movable perspective camera. Drag to orbit, Shift-drag to pan, and use the mouse wheel to zoom.">
-          <img class="camera" src="/camera/perspective.mjpg"
+          <img id="perspectiveCamera" class="camera" data-src="/camera/perspective.mjpg"
                alt="Movable perspective camera" draggable="false">
           <div class="camera-toolbar">
             <span id="cameraPose" class="camera-pose">rear view</span>
@@ -268,7 +276,7 @@
           <span>Wrist camera · recorded</span>
           <span class="camera-spec">640 × 480 · dataset source</span>
         </div>
-        <img class="camera wrist-camera" src="/camera/wrist.mjpg"
+        <img id="wristCamera" class="camera wrist-camera" data-src="/camera/wrist.mjpg"
              alt="640 by 480 wrist camera" width="640" height="480">
       </article>
     </section>
@@ -301,10 +309,17 @@
 
       <section class="card side-content">
         <h2>Local recording</h2>
+        <div class="task-summary">
+          <div id="taskTitle" class="task-name">Selecting task…</div>
+          <div id="taskInstruction" class="task-instruction">The task is selected from the workshop URL.</div>
+          <div class="progress-track" title="Success hold progress">
+            <div id="successProgress" class="progress-fill"></div>
+          </div>
+        </div>
         <label for="datasetName">Dataset name</label>
         <input id="datasetName" value="so101_workshop" maxlength="64">
         <label for="taskName">Task description</label>
-        <input id="taskName" value="unspecified manipulation task" maxlength="160">
+        <input id="taskName" value="Loading configured task…" maxlength="160" readonly>
         <div class="button-grid">
           <button id="startButton" class="primary">Start episode</button>
           <button id="stopButton">Save episode</button>
@@ -336,6 +351,8 @@
           <dt>SO-101 remote</dt><dd id="remoteStatus">checking…</dd>
           <dt>Wrist recording</dt><dd id="recordingFormat">640 × 480 · 25 FPS</dd>
           <dt>Episode frames</dt><dd id="frames">0</dd>
+          <dt>Episode timer</dt><dd id="episodeTimer">—</dd>
+          <dt>Last outcome</dt><dd id="lastOutcome">—</dd>
           <dt>Saved episodes</dt><dd id="episodes">0</dd>
           <dt>EEF xyz</dt><dd id="eef">—</dd>
           <dt>EEF quat wxyz</dt><dd id="eefQuat">—</dd>
@@ -365,6 +382,28 @@
     let cameraDrag;
     let pendingCameraMotion;
     let cameraMotionTimer;
+
+    async function claimTask() {
+      const availableResponse = await fetch("/api/tasks");
+      if (!availableResponse.ok) throw new Error("Could not load workshop tasks");
+      const available = await availableResponse.json();
+      const requested = new URLSearchParams(location.search).get("task");
+      const taskId = requested || (available.length === 1 ? available[0].id : null);
+      if (!taskId) throw new Error("This workshop link must include ?task=<task-id>");
+      const response = await fetch("/api/session/task", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({task_id: taskId}),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || `Could not select task ${taskId}`);
+      }
+      updateStatus(await response.json());
+      document.querySelectorAll("img[data-src]").forEach(camera => {
+        camera.src = camera.dataset.src;
+      });
+    }
 
     function focusTeleop() {
       if (status.keyboard_enabled === false) {
@@ -413,7 +452,6 @@
         command: name,
         payload: {
           dataset_name: document.querySelector("#datasetName").value,
-          task: document.querySelector("#taskName").value,
         }
       });
     }
@@ -450,6 +488,14 @@
       document.querySelector("#eef").textContent = next.eef_position?.map(v => v.toFixed(3)).join(", ") || "—";
       document.querySelector("#eefQuat").textContent = next.eef_orientation?.map(v => v.toFixed(3)).join(", ") || "—";
       document.querySelector("#datasetPath").textContent = next.dataset_path || "not created";
+      document.querySelector("#taskTitle").textContent = next.task_title || "Select a task";
+      document.querySelector("#taskInstruction").textContent = next.task_instruction || "Waiting for task selection.";
+      document.querySelector("#taskName").value = next.task || next.task_instruction || "Loading configured task…";
+      document.querySelector("#successProgress").style.width = `${Math.round((next.task_success_progress || 0) * 100)}%`;
+      document.querySelector("#episodeTimer").textContent = next.episode_elapsed_seconds == null
+        ? "—"
+        : `${next.episode_elapsed_seconds.toFixed(1)} / ${next.episode_timeout_seconds.toFixed(0)} s`;
+      document.querySelector("#lastOutcome").textContent = next.last_episode_outcome || "—";
       document.querySelector("#recordingFormat").textContent = next.image_size
         ? `${next.image_size[0]} × ${next.image_size[1]} · ${next.camera_hz} FPS`
         : "640 × 480 · 25 FPS";
@@ -483,11 +529,12 @@
       document.querySelector("#cameraPose").textContent = camera
         ? `az ${camera.azimuth_degrees.toFixed(1)}° · el ${camera.elevation_degrees.toFixed(1)}° · ${camera.distance.toFixed(2)} m`
         : "rear view";
-      document.querySelector("#startButton").disabled = next.recording;
+      const taskReady = next.task_ready === true;
+      document.querySelector("#startButton").disabled = !taskReady || next.recording;
       document.querySelector("#stopButton").disabled = !next.recording;
       document.querySelector("#discardButton").disabled = !next.recording;
       document.querySelector("#finishButton").disabled = next.recording || !next.dataset_path || next.finalized;
-      document.querySelector("#resetButton").disabled = next.recording;
+      document.querySelector("#resetButton").disabled = !taskReady || next.recording;
       document.querySelectorAll("kbd[data-key]").forEach(key => {
         key.classList.toggle("active", next.keys?.includes(key.dataset.key));
       });
@@ -591,7 +638,14 @@
         updateStatus(await response.json());
       } catch (_) {}
     }, 500);
-    connect();
+    claimTask()
+      .then(connect)
+      .catch(error => {
+        document.querySelector("#connectionText").textContent = "Task error";
+        const message = document.querySelector("#message");
+        message.textContent = error.message;
+        message.classList.add("error");
+      });
   </script>
 </body>
 </html>

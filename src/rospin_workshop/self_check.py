@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -18,10 +19,18 @@ from rospin_workshop.env import (
     SO101WorkshopEnv,
 )
 from rospin_workshop.recorder import LeRobotV3Recorder
+from rospin_workshop.tasks import TaskRegistry
 
 
 def main() -> None:
-    env = SO101WorkshopEnv(image_width=96, image_height=72, control_hz=25)
+    tasks_root = Path(os.environ.get("ROSPIN_TASKS_DIR", "tasks"))
+    task = TaskRegistry(tasks_root).get("cube_in_bowl")
+    env = SO101WorkshopEnv(
+        task=task,
+        image_width=96,
+        image_height=72,
+        control_hz=25,
+    )
     try:
         observation, _ = env.reset(seed=7)
         direct_joint_target_checks: dict[str, str] = {}
@@ -101,7 +110,7 @@ def main() -> None:
             close_gripper = np.zeros(len(ACTION_NAMES), dtype=np.float32)
             close_gripper[-1] = -1
             env.step_dynamics(close_gripper)
-            for _ in range(40):
+            for _ in range(90):
                 env.step_dynamics(np.zeros(len(ACTION_NAMES), dtype=np.float32))
             closed_gripper_position = float(env.joint_positions[-1])
             if closed_gripper_position > gripper_range[0] + 0.05:
@@ -113,7 +122,7 @@ def main() -> None:
             open_gripper = np.zeros(len(ACTION_NAMES), dtype=np.float32)
             open_gripper[-1] = 1
             env.step_dynamics(open_gripper)
-            for _ in range(60):
+            for _ in range(150):
                 env.step_dynamics(np.zeros(len(ACTION_NAMES), dtype=np.float32))
             opened_gripper_position = float(env.joint_positions[-1])
             if opened_gripper_position < gripper_range[1] - 0.05:
@@ -121,6 +130,27 @@ def main() -> None:
                     "Gripper did not reach its open joint limit: "
                     f"{opened_gripper_position}"
                 )
+
+            env.reset()
+            bowl_region_id = mujoco.mj_name2id(
+                env.model,
+                mujoco.mjtObj.mjOBJ_SITE,
+                "task_bowl__interior",
+            )
+            if bowl_region_id < 0:
+                raise RuntimeError("cube_in_bowl task is missing its success region")
+            env.set_task_object_pose(
+                "cube",
+                env.data.site_xpos[bowl_region_id].copy(),
+            )
+            env.data.qpos[env._qpos_indices[-1]] = env.joint_ranges[-1, 1]
+            env.data.ctrl[-1] = env.joint_ranges[-1, 1]
+            mujoco.mj_forward(env.model, env.data)
+            for _ in range(60):
+                env.step_dynamics(np.zeros(len(ACTION_NAMES), dtype=np.float32))
+            if not env.task_status()["success"]:
+                raise RuntimeError("cube_in_bowl success predicate did not latch")
+
             recorder.stop_episode(save=True)
             dataset_path = recorder.finalize()
             dataset = inspect_dataset(dataset_path)
@@ -140,6 +170,8 @@ def main() -> None:
                     "torch": torch.__version__,
                 },
                 "simulation": {
+                    "task": task.id,
+                    "task_success": env.task_status()["success"],
                     "joints": env.model.nq,
                     "actuators": env.model.nu,
                     "cameras": env.model.ncam,

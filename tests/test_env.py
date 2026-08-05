@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gymnasium as gym
+import mujoco
 import numpy as np
 from gymnasium.envs.registration import EnvSpec
 from gymnasium.utils.env_checker import check_env
@@ -152,6 +153,42 @@ def test_gripper_commands_latch_full_joint_travel() -> None:
         for _ in range(120):
             env.step_dynamics(idle)
         assert env.joint_positions[-1] > gripper_range[1] - 0.05
+    finally:
+        env.close()
+
+
+def test_gripper_uses_a_force_cap_instead_of_an_object_size_limit() -> None:
+    env = SO101WorkshopEnv(render_mode=None, control_hz=60)
+    try:
+        env.reset()
+        actuator_id = mujoco.mj_name2id(
+            env.model,
+            mujoco.mjtObj.mjOBJ_ACTUATOR,
+            "gripper_ctrl",
+        )
+        dof_id = int(env._dof_indices[-1])
+        qpos_id = int(env._qpos_indices[-1])
+
+        assert env.model.actuator_forcelimited[actuator_id]
+        np.testing.assert_allclose(
+            env.model.actuator_forcerange[actuator_id],
+            [-0.08, 0.08],
+        )
+        assert env.model.dof_damping[dof_id] == 0.08
+        assert env.model.dof_armature[dof_id] == 0.001
+        assert env.model.dof_frictionloss[dof_id] == 0.005
+
+        # A large remaining position error still produces only the configured
+        # closing torque. The target stays fully closed, so an intervening
+        # object—not a hard-coded object-size position—determines the jaw pose.
+        intermediate_position = 0.65
+        env.data.qpos[qpos_id] = intermediate_position
+        env.data.qvel[dof_id] = 0
+        env.data.ctrl[-1] = env.joint_ranges[-1, 0]
+        mujoco.mj_forward(env.model, env.data)
+        assert env.data.ctrl[-1] == env.joint_ranges[-1, 0]
+        assert env.data.qpos[qpos_id] == intermediate_position
+        assert env.data.actuator_force[actuator_id] == -0.08
     finally:
         env.close()
 

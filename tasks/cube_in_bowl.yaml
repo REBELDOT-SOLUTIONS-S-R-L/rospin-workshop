@@ -1,0 +1,36 @@
+schema_version: 1
+id: cube_in_bowl
+title: Put the cube in the bowl
+instruction: Pick up the red cube and place it inside the blue bowl.
+
+objects:
+  - name: cube
+    catalog_id: cube_40mm_red
+    pose:
+      position: [0.10, -0.02, 0.7744]
+      quaternion: [1, 0, 0, 0]
+
+  - name: bowl
+    catalog_id: bowl_120mm_blue
+    pose:
+      position: [-0.10, -0.08, 0.7544]
+      quaternion: [1, 0, 0, 0]
+
+success:
+  hold_seconds: 2.0
+  conditions:
+    - type: object_fully_inside_region
+      object: cube
+      region: bowl.interior
+    - type: gripper_open
+      minimum_fraction: 0.8
+    - type: body_speed_below
+      object: cube
+      linear_mps: 0.05
+      angular_rps: 0.5
+
+episode:
+  timeout_seconds: 20
+
+dataset:
+  description: Put the red cube into the blue bowl

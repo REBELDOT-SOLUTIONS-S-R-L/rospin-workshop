@@ -28,14 +28,16 @@
 
   <default>
     <joint damping="0.35" armature="0.015" frictionloss="0.04"/>
-    <geom condim="4" friction="1.0 0.01 0.001" solref="0.004 1"/>
+    <geom condim="4" friction="1.0 0.01 0.001" solref="0.004 1"
+          margin="0" gap="0"/>
     <default class="visual">
       <geom type="mesh" contype="0" conaffinity="0" group="1"/>
     </default>
     <default class="collision">
-      <!-- Lightweight convex proxies provide stable table contact; STL geometry
-           is used for every rendered robot component. -->
-      <geom contype="2" conaffinity="1" group="4" rgba="0 0 0 0"/>
+      <!-- Generated boxes are fully inset into the rendered STL solids.
+           contype 2 prevents robot self-collision while still contacting the
+           table and task objects. -->
+      <geom type="box" contype="2" conaffinity="1" group="4" rgba="0 0 0 0"/>
     </default>
   </default>
 
@@ -100,8 +102,6 @@
       <geom class="visual" mesh="mounting_plate" material="printed_yellow"
             pos="-0.0309827 -0.000199441 0.0474"
             euler="1.5708 -0.0000000000000135493 1.5708"/>
-      <geom class="collision" type="cylinder" pos="0 0 0.026" size="0.058 0.026"/>
-
       <body name="shoulder_link" pos="0.0388353 -0.00000000897657 0.0624"
             euler="3.14159 0 -3.14159">
         <joint name="shoulder_pan" type="hinge" axis="0 0 1"
@@ -114,8 +114,6 @@
               pos="-0.0675992 -0.000177759 0.0158499" euler="1.5708 -1.5708 0"/>
         <geom class="visual" mesh="rotation_pitch" material="printed_yellow"
               pos="0.0122008 0.0000222413 0.0464" euler="-1.5708 0 0"/>
-        <geom class="collision" type="cylinder" pos="0 0 -0.025" size="0.041 0.050"/>
-
         <body name="upper_arm_link" pos="-0.0303992 -0.0182778 -0.0542"
               euler="-1.5708 -1.5708 0">
           <joint name="shoulder_lift" type="hinge" axis="0 0 1"
@@ -126,9 +124,6 @@
                 pos="-0.11257 -0.0155 0.0187" euler="-3.14159 0 -1.5708"/>
           <geom class="visual" mesh="upper_arm" material="printed_yellow"
                 pos="-0.065085 0.012 0.0182" euler="3.14159 0 0"/>
-          <geom class="collision" type="capsule"
-                fromto="0 0 0 -0.11257 -0.028 0" size="0.026"/>
-
           <body name="lower_arm_link" pos="-0.11257 -0.028 0"
                 euler="0 0 1.5708">
             <joint name="elbow_flex" type="hinge" axis="0 0 1"
@@ -141,9 +136,6 @@
                   pos="-0.0648499 -0.032 0.018" euler="-3.14159 0 0"/>
             <geom class="visual" mesh="servo" material="servo_black"
                   pos="-0.1224 0.0052 0.0187" euler="-3.14159 0 -3.14159"/>
-            <geom class="collision" type="capsule"
-                  fromto="0 0 0 -0.1349 0.0052 0" size="0.024"/>
-
             <body name="wrist_link" pos="-0.1349 0.0052 0"
                   euler="0 0 -1.5708">
               <joint name="wrist_flex" type="hinge" axis="0 0 1"
@@ -154,9 +146,6 @@
                     pos="0 -0.0424 0.0306" euler="1.5708 1.5708 0"/>
               <geom class="visual" mesh="wrist_roll_pitch" material="printed_yellow"
                     pos="0 -0.028 0.0181" euler="-1.5708 -1.5708 0"/>
-              <geom class="collision" type="capsule"
-                    fromto="0 0 0 0 -0.0611 0.0181" size="0.023"/>
-
               <body name="gripper_link" pos="0 -0.0611 0.0181"
                     euler="1.5708 0.0486795 3.14159">
                 <joint name="wrist_roll" type="hinge" axis="0 0 1"
@@ -167,9 +156,6 @@
                       pos="0.0077 0.0001 -0.0234" euler="-1.5708 0 0"/>
                 <geom class="visual" mesh="wrist_roll_follower" material="printed_yellow"
                       pos="0 -0.000218214 0.000949706" euler="-3.14159 0 0"/>
-                <geom class="collision" type="capsule"
-                      fromto="0 0 0 -0.0079 -0.000218121 -0.0981274" size="0.024"/>
-
                 <!-- Calibrated against the 1280x720 /dev/video2 feed: the
                      jaw midpoint matches its slightly left-of-center position. -->
                 <camera name="wrist"
@@ -188,13 +174,12 @@
                       pos="0.0202 0.0188 -0.0234"
                       euler="1.5708 -0.0000000524284 0">
                   <joint name="gripper" type="hinge" axis="0 0 1"
-                         range="-0.174533 1.74533"/>
+                         range="-0.174533 1.74533"
+                         damping="0.08" armature="0.001" frictionloss="0.005"/>
                   <inertial pos="-0.00157495 -0.0300244 0.0192755" mass="0.012"
                             fullinertia="0.00000661427 0.00000189032 0.00000528738 -0.000000319807 -0.00000000590717 -0.000000109945"/>
                   <geom class="visual" mesh="moving_jaw" material="printed_yellow"
                         pos="0 0 0.0189"/>
-                  <geom class="collision" type="box" pos="0 -0.038 0.0189"
-                        size="0.012 0.045 0.012"/>
                 </body>
               </body>
             </body>
@@ -216,8 +201,11 @@
               ctrlrange="-1.65806 1.65806" forcerange="-14 14"/>
     <position name="wrist_roll_ctrl" joint="wrist_roll" kp="70" kv="4"
               ctrlrange="-2.74385 2.84121" forcerange="-10 10"/>
+    <!-- Keep commanding the full joint range so any object size can be
+         grasped, but cap jaw torque so contact stops the gripper gently. -->
     <position name="gripper_ctrl" joint="gripper" kp="35" kv="3"
-              ctrlrange="-0.174533 1.74533" forcerange="-6 6"/>
+              ctrlrange="-0.174533 1.74533" forcelimited="true"
+              forcerange="-0.08 0.08"/>
   </actuator>
 
   <keyframe>

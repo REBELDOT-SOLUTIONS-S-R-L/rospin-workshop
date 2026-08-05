@@ -11,6 +11,9 @@ import mujoco
 import numpy as np
 from gymnasium import spaces
 
+from rospin_workshop.collision import compose_robot_collisions
+from rospin_workshop.tasks import OBJECT_CATALOG, TaskDefinition, compose_task_model
+
 JOINT_NAMES = (
     "shoulder_pan",
     "shoulder_lift",
@@ -39,6 +42,11 @@ DIRECT_JOINT_ACTIONS = (
     (5, 2),  # elbow flex
     (6, 3),  # wrist flex
     (7, 4),  # wrist roll
+)
+
+HOME_JOINT_POSITIONS = np.array(
+    [0.0, -0.7651, 0.7632, 0.6437, -2.2143, 0.65],
+    dtype=np.float64,
 )
 
 
@@ -80,6 +88,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self,
         *,
         model_path: str | Path | None = None,
+        task: TaskDefinition | None = None,
         render_mode: str | None = "rgb_array",
         image_width: int = 640,
         image_height: int = 480,
@@ -105,6 +114,9 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self.gripper_step = gripper_speed / control_hz
         self.ik_damping = ik_damping
         self.max_joint_step = max_joint_step
+        self.task = task
+        self._task_condition_started_at: float | None = None
+        self._task_success_latched = False
 
         if model_path is None:
             model_resource = files("rospin_workshop").joinpath(
@@ -117,6 +129,9 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
                 {'"': "&quot;"},
             )
             model_xml = model_xml.replace("SO101_MESH_DIR", mesh_dir)
+            model_xml = compose_robot_collisions(model_xml)
+            if self.task is not None:
+                model_xml = compose_task_model(model_xml, self.task)
             self.model = mujoco.MjModel.from_xml_string(model_xml)
         else:
             self.model = mujoco.MjModel.from_xml_path(str(Path(model_path)))
@@ -138,6 +153,33 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             name: mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
             for name in CAMERA_NAMES
         }
+        self._task_body_ids: dict[str, int] = {}
+        self._task_region_ids: dict[str, int] = {}
+        if self.task is not None:
+            for instance in self.task.objects:
+                body_id = mujoco.mj_name2id(
+                    self.model,
+                    mujoco.mjtObj.mjOBJ_BODY,
+                    f"task_{instance.name}",
+                )
+                if body_id < 0:
+                    raise ValueError(
+                        f"Task object was not composed into the model: {instance.name}"
+                    )
+                self._task_body_ids[instance.name] = body_id
+            for condition in self.task.success_conditions:
+                if condition.type != "object_fully_inside_region":
+                    continue
+                region = str(condition.values["region"])
+                owner, region_name = region.split(".", 1)
+                site_id = mujoco.mj_name2id(
+                    self.model,
+                    mujoco.mjtObj.mjOBJ_SITE,
+                    f"task_{owner}__{region_name}",
+                )
+                if site_id < 0:
+                    raise ValueError(f"Task success region does not exist: {region}")
+                self._task_region_ids[region] = site_id
         if (
             np.any(self._joint_ids < 0)
             or self._eef_site_id < 0
@@ -315,6 +357,98 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             "eef_orientation": self.eef_orientation,
             "joint_targets": self.data.ctrl.copy().astype(np.float32),
             "sim_time": float(self.data.time),
+            "task": self.task_status(),
+        }
+
+    def _object_fully_inside_region(self, object_name: str, region: str) -> bool:
+        if self.task is None:
+            return False
+        instance = next(item for item in self.task.objects if item.name == object_name)
+        half_extents = OBJECT_CATALOG[instance.catalog_id].half_extents
+        if half_extents is None:
+            raise ValueError(
+                f"Object {instance.catalog_id!r} does not define containment extents"
+            )
+        body_id = self._task_body_ids[object_name]
+        site_id = self._task_region_ids[region]
+        body_rotation = self.data.xmat[body_id].reshape(3, 3)
+        body_position = self.data.xpos[body_id]
+        corners = np.array(
+            [
+                [x, y, z]
+                for x in (-half_extents[0], half_extents[0])
+                for y in (-half_extents[1], half_extents[1])
+                for z in (-half_extents[2], half_extents[2])
+            ],
+            dtype=np.float64,
+        )
+        world_corners = corners @ body_rotation.T + body_position
+        site_rotation = self.data.site_xmat[site_id].reshape(3, 3)
+        local_corners = (world_corners - self.data.site_xpos[site_id]) @ site_rotation
+        radius, half_height = self.model.site_size[site_id, :2]
+        radial = np.linalg.norm(local_corners[:, :2], axis=1)
+        return bool(
+            np.all(radial <= radius + 1e-8)
+            and np.all(np.abs(local_corners[:, 2]) <= half_height + 1e-8)
+        )
+
+    def _task_conditions_met(self) -> bool:
+        if self.task is None:
+            return False
+        for condition in self.task.success_conditions:
+            values = condition.values
+            if condition.type == "object_fully_inside_region":
+                if not self._object_fully_inside_region(
+                    str(values["object"]), str(values["region"])
+                ):
+                    return False
+            elif condition.type == "gripper_open":
+                gripper_range = self.joint_ranges[-1]
+                fraction = (self.joint_positions[-1] - gripper_range[0]) / np.ptp(
+                    gripper_range
+                )
+                if fraction < float(values["minimum_fraction"]):
+                    return False
+            elif condition.type == "body_speed_below":
+                body_id = self._task_body_ids[str(values["object"])]
+                angular_speed = float(np.linalg.norm(self.data.cvel[body_id, :3]))
+                linear_speed = float(np.linalg.norm(self.data.cvel[body_id, 3:]))
+                if (
+                    linear_speed > float(values["linear_mps"])
+                    or angular_speed > float(values["angular_rps"])
+                ):
+                    return False
+            else:  # validated task definitions cannot reach this branch
+                raise ValueError(f"Unsupported task condition: {condition.type}")
+        return True
+
+    def _update_task_success(self) -> None:
+        if self.task is None or self._task_success_latched:
+            return
+        if not self._task_conditions_met():
+            self._task_condition_started_at = None
+            return
+        if self._task_condition_started_at is None:
+            self._task_condition_started_at = float(self.data.time)
+            return
+        if (
+            float(self.data.time) - self._task_condition_started_at
+            >= self.task.success_hold_seconds
+        ):
+            self._task_success_latched = True
+
+    def task_status(self) -> dict[str, Any] | None:
+        if self.task is None:
+            return None
+        elapsed = (
+            max(0.0, float(self.data.time) - self._task_condition_started_at)
+            if self._task_condition_started_at is not None
+            else 0.0
+        )
+        return {
+            "conditions_met": self._task_condition_started_at is not None,
+            "success": self._task_success_latched,
+            "success_progress": min(1.0, elapsed / self.task.success_hold_seconds),
         }
 
     def _apply_action(self, action: np.ndarray) -> None:
@@ -374,6 +508,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self._apply_action(action)
         for _ in range(self._physics_steps):
             mujoco.mj_step(self.model, self.data)
+        self._update_task_success()
         return self._get_state_obs(), 0.0, False, False, self._get_info()
 
     def step_joint_targets(
@@ -405,6 +540,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         self._previous_action.fill(0)
         for _ in range(self._physics_steps):
             mujoco.mj_step(self.model, self.data)
+        self._update_task_success()
         return self._get_state_obs(), 0.0, False, False, self._get_info()
 
     def hold_current_pose(self) -> None:
@@ -464,17 +600,62 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         options: dict[str, Any] | None = None,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         super().reset(seed=seed)
-        home_key = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "home")
-        if home_key >= 0:
-            mujoco.mj_resetDataKeyframe(self.model, self.data, home_key)
-        else:
+        if self.task is not None:
             mujoco.mj_resetData(self.model, self.data)
+            self.data.qpos[self._qpos_indices] = HOME_JOINT_POSITIONS
+            self.data.ctrl[:] = HOME_JOINT_POSITIONS
+        else:
+            home_key = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_KEY, "home"
+            )
+            if home_key >= 0:
+                mujoco.mj_resetDataKeyframe(self.model, self.data, home_key)
+            else:
+                mujoco.mj_resetData(self.model, self.data)
         self._previous_action.fill(0)
+        self._task_condition_started_at = None
+        self._task_success_latched = False
         mujoco.mj_forward(self.model, self.data)
         observation = (
             self._get_obs() if self._renderer is not None else self._get_state_obs()
         )
         return observation, self._get_info()
+
+    def set_task_object_pose(
+        self,
+        name: str,
+        position: np.ndarray,
+        quaternion: np.ndarray | None = None,
+    ) -> None:
+        """Place a free task object, primarily for deterministic setup checks."""
+
+        if name not in self._task_body_ids:
+            raise KeyError(name)
+        body_id = self._task_body_ids[name]
+        joint_id = int(self.model.body_jntadr[body_id])
+        if joint_id < 0 or self.model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
+            raise ValueError(f"Task object is not freely movable: {name}")
+        qpos_address = int(self.model.jnt_qposadr[joint_id])
+        dof_address = int(self.model.jnt_dofadr[joint_id])
+        position_array = np.asarray(position, dtype=np.float64)
+        if position_array.shape != (3,) or not np.all(np.isfinite(position_array)):
+            raise ValueError("Object position must contain three finite values")
+        quaternion_array = (
+            self.data.qpos[qpos_address + 3 : qpos_address + 7].copy()
+            if quaternion is None
+            else np.asarray(quaternion, dtype=np.float64)
+        )
+        if quaternion_array.shape != (4,) or not np.all(np.isfinite(quaternion_array)):
+            raise ValueError("Object quaternion must contain four finite values")
+        norm = np.linalg.norm(quaternion_array)
+        if norm < 1e-8:
+            raise ValueError("Object quaternion cannot be zero")
+        self.data.qpos[qpos_address : qpos_address + 3] = position_array
+        self.data.qpos[qpos_address + 3 : qpos_address + 7] = quaternion_array / norm
+        self.data.qvel[dof_address : dof_address + 6] = 0
+        self._task_condition_started_at = None
+        self._task_success_latched = False
+        mujoco.mj_forward(self.model, self.data)
 
     def render(self) -> np.ndarray:
         if self._renderer is None:

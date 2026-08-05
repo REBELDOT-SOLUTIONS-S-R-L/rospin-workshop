@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from rospin_workshop.config import RuntimeConfig
-from rospin_workshop.controller import WorkshopController
+from rospin_workshop.controller import TaskSessionConflictError, WorkshopController
 
 
 def create_app(config: RuntimeConfig | None = None) -> FastAPI:
@@ -53,12 +53,31 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     async def camera_stream(camera: str) -> StreamingResponse:
         if camera not in ("wrist", "perspective"):
             raise HTTPException(status_code=404, detail="Unknown camera")
+        if not controller.status().get("task_ready"):
+            raise HTTPException(status_code=503, detail="Select a task first")
         return StreamingResponse(
             mjpeg(camera), media_type="multipart/x-mixed-replace; boundary=frame"
         )
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
+        return controller.status()
+
+    @app.get("/api/tasks")
+    async def tasks() -> list[dict[str, Any]]:
+        return controller.tasks()
+
+    @app.post("/api/session/task")
+    async def select_task(payload: dict[str, Any]) -> dict[str, Any]:
+        task_id = payload.get("task_id")
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise HTTPException(status_code=422, detail="task_id is required")
+        try:
+            await asyncio.to_thread(controller.select_task, task_id.strip())
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TaskSessionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return controller.status()
 
     @app.websocket("/ws")

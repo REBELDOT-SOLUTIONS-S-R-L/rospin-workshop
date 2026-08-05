@@ -32,7 +32,10 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         assert "grid-template-columns: repeat(2, 642px)" in page
         assert "Wrist camera · recorded" in page
         assert "640 × 480 · dataset source" in page
-        assert 'class="camera wrist-camera"' in page
+        assert 'id="wristCamera" class="camera wrist-camera"' in page
+        assert 'data-src="/camera/wrist.mjpg"' in page
+        assert 'id="taskTitle"' in page
+        assert 'id="successProgress"' in page
         assert 'width="640" height="480"' in page
         views_start = page.index('<section class="views">')
         views_end = page.index("</section>", views_start)
@@ -48,8 +51,24 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         assert 'id="keyboardToggle"' in page
         assert "Turn off to follow the physical SO-101 remote." in page
 
-        initial = client.get("/api/status").json()
+        waiting = client.get("/api/status").json()
+        assert waiting["task_ready"] is False
+        tasks = client.get("/api/tasks").json()
+        assert [task["id"] for task in tasks] == ["cube_in_bowl"]
+        selected = client.post(
+            "/api/session/task", json={"task_id": "cube_in_bowl"}
+        )
+        assert selected.status_code == 200
+        assert client.post(
+            "/api/session/task", json={"task_id": "cube_in_bowl"}
+        ).status_code == 200
+        assert client.post(
+            "/api/session/task", json={"task_id": "missing_task"}
+        ).status_code == 404
+        initial = selected.json()
         assert initial["error"] is None
+        assert initial["task_ready"] is True
+        assert initial["task_id"] == "cube_in_bowl"
         assert initial["keyboard_enabled"] is True
         assert initial["active_control_source"] == "keyboard"
         assert initial["remote"]["configured"] is False
@@ -137,16 +156,15 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
             )
             assert target_changes.tolist() == [joint_index]
 
-        gripper_start = client.get("/api/status").json()["joint_positions"][5]
         with client.websocket_connect("/ws") as socket:
             socket.send_json({"type": "key", "key": "[", "pressed": True})
             socket.receive_json()
             socket.send_json({"type": "key", "key": "[", "pressed": False})
             socket.receive_json()
-        time.sleep(0.6)
-        closed = client.get("/api/status").json()
-        assert closed["joint_targets"][5] < -0.17
-        assert closed["joint_positions"][5] < gripper_start - 0.2
+            time.sleep(0.6)
+            closed = client.get("/api/status").json()
+            assert closed["joint_targets"][5] < -0.17
+            assert abs(closed["gripper_force_nm"]) <= 0.0801
 
 
 def test_websocket_can_disable_and_reenable_keyboard_controls(tmp_path) -> None:
@@ -160,7 +178,9 @@ def test_websocket_can_disable_and_reenable_keyboard_controls(tmp_path) -> None:
         )
     )
     with TestClient(app) as client:
-        initial = client.get("/api/status").json()
+        initial = client.post(
+            "/api/session/task", json={"task_id": "cube_in_bowl"}
+        ).json()
         with client.websocket_connect("/ws") as socket:
             socket.send_json({"type": "keyboard_control", "enabled": False})
             disabled = socket.receive_json()["data"]

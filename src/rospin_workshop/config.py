@@ -17,6 +17,7 @@ def _optional_env(name: str) -> str | None:
 @dataclass(frozen=True)
 class RuntimeConfig:
     data_root: Path = Path(os.environ.get("ROSPIN_DATA_ROOT", "/workspace/data"))
+    tasks_root: Path = Path(os.environ.get("ROSPIN_TASKS_DIR", "tasks"))
     host: str = os.environ.get("ROSPIN_HOST", "0.0.0.0")
     port: int = _int_env("ROSPIN_PORT", 8000)
     control_hz: int = _int_env("ROSPIN_CONTROL_HZ", 60)
