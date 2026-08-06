@@ -37,6 +37,7 @@ RUN python -m pip install \
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY tasks ./tasks
+COPY trajectories ./trajectories
 COPY assets /assets
 
 RUN python -m pip install .

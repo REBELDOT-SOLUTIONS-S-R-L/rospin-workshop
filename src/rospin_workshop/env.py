@@ -473,6 +473,25 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             "success_progress": min(1.0, elapsed / self.task.success_hold_seconds),
         }
 
+    def task_object_states(self) -> dict[str, dict[str, list[float]]]:
+        """Return world-frame poses and velocities for configured task objects."""
+
+        states: dict[str, dict[str, list[float]]] = {}
+        for name, body_id in self._task_body_ids.items():
+            quaternion = np.empty(4, dtype=np.float64)
+            mujoco.mju_mat2Quat(quaternion, self.data.xmat[body_id])
+            states[name] = {
+                "position": self.data.xpos[body_id].astype(float).tolist(),
+                "quaternion": quaternion.tolist(),
+                "angular_velocity": self.data.cvel[body_id, :3]
+                .astype(float)
+                .tolist(),
+                "linear_velocity": self.data.cvel[body_id, 3:]
+                .astype(float)
+                .tolist(),
+            }
+        return states
+
     def _apply_action(self, action: np.ndarray) -> None:
         if not np.any(action):
             # A released key must stop the robot at its current pose instead of

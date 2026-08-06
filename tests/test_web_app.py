@@ -62,6 +62,17 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         assert ready["task_id"] == "cube_in_bowl"
         tasks = client.get("/api/tasks").json()
         assert [task["id"] for task in tasks] == ["cube_in_bowl"]
+        trajectory_status = client.get("/api/trajectory/status")
+        assert trajectory_status.status_code == 200
+        assert trajectory_status.json()["running"] is False
+        assert client.post("/api/trajectory/start", json={}).status_code == 422
+        assert (
+            client.post(
+                "/api/trajectory/start",
+                json={"program": "missing.py", "preview": True},
+            ).status_code
+            == 422
+        )
         selected = client.post(
             "/api/session/task", json={"task_id": "cube_in_bowl"}
         )

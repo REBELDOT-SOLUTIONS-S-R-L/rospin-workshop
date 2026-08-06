@@ -3,6 +3,8 @@ set -eu
 
 command_name="${1:-start}"
 dataset_name="${2:-}"
+episode_count="${3:-10}"
+seed="${4:-0}"
 compose_files="-f compose.yaml"
 device="cpu"
 
@@ -28,9 +30,18 @@ case "$command_name" in
     docker compose $compose_files run --rm --entrypoint rospin-train-act \
       workshop "/workspace/data/datasets/$dataset_name" --device "$device"
     ;;
+  preview)
+    test -n "$dataset_name"
+    docker compose $compose_files exec -T workshop \
+      rospin-generate "$dataset_name" --preview --seed "$seed"
+    ;;
+  generate)
+    test -n "$dataset_name"
+    docker compose $compose_files exec -T workshop \
+      rospin-generate "$dataset_name" --episodes "$episode_count" --seed "$seed"
+    ;;
   *)
-    echo "Usage: $0 {start|stop|check|train} [dataset-directory]" >&2
+    echo "Usage: $0 {start|stop|check|train|preview|generate} [name] [episodes] [seed]" >&2
     exit 2
     ;;
 esac
-

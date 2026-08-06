@@ -11,7 +11,12 @@ import cv2
 import numpy as np
 
 from rospin_workshop.config import RuntimeConfig
-from rospin_workshop.env import ACTION_NAMES, CAMERA_NAMES, SO101WorkshopEnv
+from rospin_workshop.env import (
+    ACTION_NAMES,
+    CAMERA_NAMES,
+    JOINT_NAMES,
+    SO101WorkshopEnv,
+)
 from rospin_workshop.recorder import LeRobotV3Recorder
 from rospin_workshop.remote import (
     SO101RemoteReader,
@@ -175,6 +180,8 @@ class WorkshopController:
         self._keyboard_enabled = True
         self._control_mode_changed = False
         self._active_control_source = "keyboard"
+        self._trajectory_active = False
+        self._trajectory_joint_targets: np.ndarray | None = None
         self._remote = remote_reader or SO101RemoteReader(
             port=self.config.remote_port,
             calibration_dir=self.config.remote_calibration_root,
@@ -184,6 +191,7 @@ class WorkshopController:
         self._recorder: LeRobotV3Recorder | None = None
         self._last_dataset_path: Path | None = None
         self._episode_started_at: float | None = None
+        self._scripted_recording = False
         self._last_episode_outcome: str | None = None
         self._message = "Waiting for task selection"
         self._error: str | None = None
@@ -210,11 +218,15 @@ class WorkshopController:
             "keys": [],
             "keyboard_enabled": True,
             "active_control_source": "keyboard",
+            "trajectory_active": False,
+            "scripted_recording": False,
             "remote": self._remote.status(),
             "eef_position": None,
             "eef_orientation": None,
             "joint_positions": None,
+            "joint_velocities": None,
             "joint_targets": None,
+            "task_objects": {},
             "gripper_force_nm": None,
             "sim_time": None,
             "control_hz": self.config.control_hz,
@@ -328,6 +340,41 @@ class WorkshopController:
                 "active_control_source": self._active_control_source,
             }
 
+    def begin_trajectory_control(self) -> None:
+        """Give a trajectory worker exclusive access to the simulated robot."""
+
+        with self._lock:
+            if self._trajectory_active:
+                raise RuntimeError("Trajectory control is already active")
+            self._trajectory_active = True
+            self._trajectory_joint_targets = None
+            self._control_mode_changed = True
+            self._keys.clear()
+            self._gripper_command = 0.0
+
+    def set_trajectory_joint_targets(self, targets: np.ndarray) -> None:
+        targets = np.asarray(targets, dtype=np.float64)
+        if targets.shape != (len(JOINT_NAMES),):
+            raise ValueError(
+                f"Trajectory target must contain {len(JOINT_NAMES)} joints"
+            )
+        if not np.all(np.isfinite(targets)):
+            raise ValueError("Trajectory joint targets must all be finite")
+        with self._lock:
+            if not self._trajectory_active:
+                raise RuntimeError("Trajectory control is not active")
+            self._trajectory_joint_targets = targets.copy()
+
+    def end_trajectory_control(self) -> None:
+        """Release trajectory ownership and hold the current simulated pose."""
+
+        with self._lock:
+            if not self._trajectory_active:
+                return
+            self._trajectory_active = False
+            self._trajectory_joint_targets = None
+            self._control_mode_changed = True
+
     def control_perspective_camera(
         self,
         action: str,
@@ -359,13 +406,29 @@ class WorkshopController:
             raise RuntimeError("Simulation environment is not ready")
         with self._lock:
             keyboard_enabled = self._keyboard_enabled
+            trajectory_active = self._trajectory_active
+            trajectory_targets = (
+                self._trajectory_joint_targets.copy()
+                if self._trajectory_joint_targets is not None
+                else None
+            )
             control_mode_changed = self._control_mode_changed
             self._control_mode_changed = False
 
         if control_mode_changed:
             self.env.hold_current_pose()
 
-        if keyboard_enabled:
+        if trajectory_active:
+            if trajectory_targets is None:
+                self._observation, _, _, _, _ = self.env.step_dynamics(
+                    np.zeros(len(ACTION_NAMES), dtype=np.float32)
+                )
+            else:
+                self._observation, _, _, _, _ = self.env.step_joint_targets(
+                    trajectory_targets
+                )
+            source = "trajectory"
+        elif keyboard_enabled:
             action = self._current_action()
             self._observation, _, _, _, _ = self.env.step_dynamics(action)
             source = "keyboard"
@@ -376,42 +439,19 @@ class WorkshopController:
                 self._observation, _, _, _, _ = self.env.step_dynamics(action)
                 source = "hold"
             else:
-                previous_targets = self.env.data.ctrl.copy()
                 targets = remote_positions_to_joint_targets(
                     remote_positions,
                     self.env.joint_ranges,
                 )
                 self._observation, _, _, _, _ = self.env.step_joint_targets(targets)
-                action = self._joint_target_action(
-                    previous_targets,
-                    self.env.data.ctrl,
-                )
                 source = "remote"
 
         with self._lock:
             self._active_control_source = source
-        return action
-
-    def _joint_target_action(
-        self,
-        previous_targets: np.ndarray,
-        next_targets: np.ndarray,
-    ) -> np.ndarray:
-        if self.env is None:
-            raise RuntimeError("Simulation environment is not ready")
-        action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
-        action[3:8] = np.clip(
-            (np.asarray(next_targets[:5]) - np.asarray(previous_targets[:5]))
-            / self.env.joint_step,
-            -1.0,
-            1.0,
-        )
-        gripper_range = self.env.joint_ranges[-1]
-        gripper_fraction = (
-            float(next_targets[-1]) - gripper_range[0]
-        ) / np.ptp(gripper_range)
-        action[-1] = np.clip(2.0 * gripper_fraction - 1.0, -1.0, 1.0)
-        return action
+        # The dataset action is the command a physical SO-101 consumes: six
+        # absolute joint targets. Keyboard, remote, and trajectory control all
+        # converge to this same representation before recording.
+        return self.env.data.ctrl.astype(np.float32, copy=True)
 
     @staticmethod
     def _encode_image(camera: str, rgb: np.ndarray) -> bytes:
@@ -648,7 +688,7 @@ class WorkshopController:
             except queue.Empty:
                 return
             try:
-                self._execute_command(command, payload)
+                response["result"] = self._execute_command(command, payload)
             except Exception as exc:  # noqa: BLE001 - return command errors to caller
                 response["error"] = exc
             finally:
@@ -664,7 +704,7 @@ class WorkshopController:
                 raise RuntimeError("Camera is not ready")
             return self._jpeg_frames[camera]
 
-    def command(self, command: str, payload: dict[str, Any]) -> None:
+    def command(self, command: str, payload: dict[str, Any]) -> Any:
         if not self._thread.is_alive():
             raise RuntimeError("Simulation control loop is not running")
         event = threading.Event()
@@ -674,6 +714,7 @@ class WorkshopController:
             raise TimeoutError(f"Command timed out: {command}")
         if "error" in response:
             raise response["error"]
+        return response.get("result")
 
     def tasks(self) -> list[dict[str, Any]]:
         return self.task_registry.list()
@@ -699,7 +740,7 @@ class WorkshopController:
             self._observation, _ = self.env.reset()
             for render_thread in self._render_threads:
                 render_thread.start()
-            startup_action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+            startup_action = self.env.data.ctrl.astype(np.float32, copy=True)
             for camera in CAMERA_NAMES:
                 self._submit_render(camera, startup_action)
             startup_deadline = time.monotonic() + 30
@@ -716,13 +757,15 @@ class WorkshopController:
             raise
         self._message = f"Task ready: {task.title}"
 
-    def _reset_task_environment(self) -> None:
+    def _reset_task_environment(self, *, seed: int | None = None) -> None:
         if self.env is None:
             raise RuntimeError("Select a task before resetting the simulation")
         with self._lock:
             self._keys.clear()
             self._gripper_command = 0.0
-        self._observation, _ = self.env.reset()
+            if self._trajectory_active:
+                self._trajectory_joint_targets = None
+        self._observation, _ = self.env.reset(seed=seed)
         self._render_epoch += 1
         self._render_requested.set()
 
@@ -731,6 +774,7 @@ class WorkshopController:
         frames = recorder.stop_episode(save=save)
         self._recording_generation += 1
         self._episode_started_at = None
+        self._scripted_recording = False
         self._last_episode_outcome = outcome
         self._reset_task_environment()
         verb = "Saved" if save else "Discarded"
@@ -744,6 +788,7 @@ class WorkshopController:
             or self._recorder is None
             or not self._recorder.recording
             or self._episode_started_at is None
+            or self._scripted_recording
         ):
             return
         task_status = self.env.task_status() or {}
@@ -756,7 +801,7 @@ class WorkshopController:
         ):
             self._complete_episode(save=False, outcome="timeout")
 
-    def _execute_command(self, command: str, payload: dict[str, Any]) -> None:
+    def _execute_command(self, command: str, payload: dict[str, Any]) -> Any:
         try:
             self._error = None
             if command == "select_task":
@@ -775,7 +820,10 @@ class WorkshopController:
             elif command == "reset":
                 if self._recorder is not None and self._recorder.recording:
                     raise RuntimeError("Stop or discard the recording before reset")
-                self._reset_task_environment()
+                seed_value = payload.get("seed")
+                if seed_value is not None and not isinstance(seed_value, int):
+                    raise ValueError("reset seed must be an integer")
+                self._reset_task_environment(seed=seed_value)
                 self._last_episode_outcome = "reset"
                 self._message = "Simulation reset"
             elif command == "start_recording":
@@ -788,26 +836,48 @@ class WorkshopController:
                         image_width=self.config.image_width,
                         image_height=self.config.image_height,
                     )
-                self._reset_task_environment()
+                seed_value = payload.get("seed")
+                if seed_value is not None and not isinstance(seed_value, int):
+                    raise ValueError("recording seed must be an integer")
+                self._reset_task_environment(seed=seed_value)
                 self._recording_generation += 1
                 self._recorder.start_episode(
                     dataset_name=str(payload.get("dataset_name", "so101_session")),
                     task=self._selected_task.dataset_description,
                 )
                 self._episode_started_at = time.monotonic()
+                self._scripted_recording = bool(payload.get("scripted", False))
                 self._last_episode_outcome = None
                 self._render_requested.set()
                 self._message = "Recording episode"
             elif command == "stop_recording":
-                self._complete_episode(save=True, outcome="manual_save")
+                self._complete_episode(
+                    save=True,
+                    outcome=str(payload.get("outcome", "manual_save")),
+                )
             elif command == "discard_recording":
-                self._complete_episode(save=False, outcome="manual_discard")
+                self._complete_episode(
+                    save=False,
+                    outcome=str(payload.get("outcome", "manual_discard")),
+                )
             elif command == "finish_dataset":
                 recorder = self._require_recorder(recording=False)
                 if recorder.num_episodes < 1 and not recorder.recording:
                     raise RuntimeError("Save at least one episode before finishing")
                 self._last_dataset_path = recorder.finalize()
                 self._message = f"Dataset finalized: {self._last_dataset_path}"
+            elif command == "new_dataset":
+                if self._recorder is not None and self._recorder.recording:
+                    raise RuntimeError("Stop or discard the active recording first")
+                if (
+                    self._recorder is not None
+                    and not self._recorder.finalized
+                    and self._recorder.num_episodes > 0
+                ):
+                    self._last_dataset_path = self._recorder.finalize()
+                self._recorder = None
+                self._last_dataset_path = None
+                self._message = "Ready for a new dataset"
             else:
                 raise ValueError(f"Unknown command: {command}")
         except Exception as exc:
@@ -868,6 +938,8 @@ class WorkshopController:
             "keys": sorted(self._keys),
             "keyboard_enabled": self._keyboard_enabled,
             "active_control_source": self._active_control_source,
+            "trajectory_active": self._trajectory_active,
+            "scripted_recording": self._scripted_recording,
             "remote": self._remote.status(),
             "eef_position": (
                 self.env.eef_position.round(4).tolist()
@@ -884,10 +956,18 @@ class WorkshopController:
                 if self.env is not None
                 else None
             ),
+            "joint_velocities": (
+                self.env.joint_velocities.round(4).tolist()
+                if self.env is not None
+                else None
+            ),
             "joint_targets": (
                 self.env.data.ctrl.round(4).tolist()
                 if self.env is not None
                 else None
+            ),
+            "task_objects": (
+                self.env.task_object_states() if self.env is not None else {}
             ),
             "gripper_force_nm": (
                 round(float(self.env.data.actuator_force[-1]), 4)

@@ -136,6 +136,8 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
     assert details["decoded_frame_shapes"] == {
         "observation.images.wrist": [3, 72, 96],
     }
+    assert details["features"]["action"]["shape"] == (6,)
+    assert details["features"]["action"]["names"][-1] == "gripper"
 
 
 def test_keyboard_mapping_and_gripper_command_latching(tmp_path) -> None:
@@ -213,8 +215,7 @@ def test_disabled_keyboard_uses_rate_limited_remote_joint_targets(tmp_path) -> N
         assert np.all(np.abs(after[:-1] - before[:-1]) <= env.joint_step + 1e-10)
         assert abs(after[-1] - before[-1]) <= env.gripper_step + 1e-10
         assert controller._active_control_source == "remote"
-        assert np.any(action[3:8])
-        assert -1.0 <= action[-1] <= 1.0
+        np.testing.assert_allclose(action, after)
     finally:
         env.close()
 
@@ -272,7 +273,7 @@ def test_wrist_render_can_be_submitted_while_perspective_is_busy(tmp_path) -> No
     controller.env = env
     try:
         env.reset()
-        action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+        action = env.data.ctrl.astype(np.float32, copy=True)
 
         assert controller._submit_render("perspective", action) is True
         assert controller._submit_render("wrist", action) is True

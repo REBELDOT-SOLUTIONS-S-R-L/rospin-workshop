@@ -6,6 +6,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from rospin_workshop.env import JOINT_NAMES
+
 
 def inspect_dataset(root: Path) -> dict[str, Any]:
     info_path = root / "meta" / "info.json"
@@ -33,6 +35,13 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
     missing = required.difference(dataset.features)
     if missing:
         raise ValueError(f"Dataset is missing required features: {sorted(missing)}")
+    action_feature = dataset.features["action"]
+    if tuple(action_feature["shape"]) != (len(JOINT_NAMES),) or list(
+        action_feature.get("names", [])
+    ) != list(JOINT_NAMES):
+        raise ValueError(
+            "Dataset action must contain six commanded SO-101 joint positions"
+        )
     if dataset.num_episodes < 1 or dataset.num_frames < 1:
         raise ValueError("Dataset has no saved frames or episodes")
     sample = dataset[0]

@@ -64,11 +64,11 @@ def main() -> None:
                 action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
                 action[0] = 1
                 observation, _, _, _, _ = env.step(action)
-                recorder.add_frame(observation, action)
+                recorder.add_frame(observation, env.data.ctrl)
             translated_position = env.eef_position.copy()
             brake_action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
             observation, _, _, _, _ = env.step(brake_action)
-            recorder.add_frame(observation, brake_action)
+            recorder.add_frame(observation, env.data.ctrl)
             rotation_start = env.eef_orientation.copy()
             joint_start = env.joint_positions.copy()
             target_start = env.data.ctrl.copy()
@@ -76,7 +76,7 @@ def main() -> None:
                 action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
                 action[ACTION_NAMES.index("wrist_roll_delta")] = 1
                 observation, _, _, _, _ = env.step(action)
-                recorder.add_frame(observation, action)
+                recorder.add_frame(observation, env.data.ctrl)
             translation_x = float(translated_position[0] - start_position[0])
             rotation_angle = float(
                 2
@@ -158,6 +158,10 @@ def main() -> None:
                 raise RuntimeError("Viewer-only perspective camera entered the dataset")
             if dataset["fps"] != 25 or dataset["video_fps"] != 25:
                 raise RuntimeError("Dataset and wrist video are not both 25 FPS")
+            if tuple(dataset["features"]["action"]["shape"]) != (
+                len(JOINT_NAMES),
+            ):
+                raise RuntimeError("Dataset action is not six joint targets")
             if not np.isclose(dataset["timestamp_step_seconds"], 0.04, atol=1e-5):
                 raise RuntimeError("Dataset timestamps are not spaced at 25 Hz")
 

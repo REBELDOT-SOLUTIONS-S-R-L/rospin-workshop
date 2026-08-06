@@ -12,11 +12,13 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from rospin_workshop.config import RuntimeConfig
 from rospin_workshop.controller import TaskSessionConflictError, WorkshopController
+from rospin_workshop.trajectory.runner import TrajectoryManager
 
 
 def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     runtime = config or RuntimeConfig()
     controller = WorkshopController(runtime)
+    trajectory_manager = TrajectoryManager(controller, runtime.trajectories_root)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -31,10 +33,12 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
                 await asyncio.to_thread(controller.select_task, only_task.id)
             yield
         finally:
+            trajectory_manager.close()
             controller.close()
 
     app = FastAPI(title="ROSpin SO-101 Workshop", lifespan=lifespan)
     app.state.controller = controller
+    app.state.trajectory_manager = trajectory_manager
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
@@ -73,6 +77,36 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     @app.get("/api/tasks")
     async def tasks() -> list[dict[str, Any]]:
         return controller.tasks()
+
+    @app.get("/api/trajectory/status")
+    async def trajectory_status() -> dict[str, Any]:
+        return trajectory_manager.status()
+
+    @app.post("/api/trajectory/start")
+    async def start_trajectory(payload: dict[str, Any]) -> dict[str, Any]:
+        program = payload.get("program")
+        if not isinstance(program, str) or not program.strip():
+            raise HTTPException(status_code=422, detail="program is required")
+        try:
+            return await asyncio.to_thread(
+                trajectory_manager.start,
+                program_path=program.strip(),
+                episodes=int(payload.get("episodes", 1)),
+                seed=int(payload.get("seed", 0)),
+                preview=bool(payload.get("preview", False)),
+                dataset_name=str(
+                    payload.get("dataset_name", "synthetic_trajectory")
+                ),
+                preflight=bool(payload.get("preflight", True)),
+            )
+        except (FileNotFoundError, ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/trajectory/stop")
+    async def stop_trajectory() -> dict[str, Any]:
+        return trajectory_manager.stop()
 
     @app.post("/api/session/task")
     async def select_task(payload: dict[str, Any]) -> dict[str, Any]:

@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from rospin_workshop.env import ACTION_NAMES, JOINT_NAMES
+from rospin_workshop.env import JOINT_NAMES
 
 DEFAULT_TASK = "unspecified manipulation task"
 
@@ -71,8 +71,8 @@ class LeRobotV3Recorder:
             },
             "action": {
                 "dtype": "float32",
-                "shape": (len(ACTION_NAMES),),
-                "names": list(ACTION_NAMES),
+                "shape": (len(JOINT_NAMES),),
+                "names": list(JOINT_NAMES),
             },
         }
 
@@ -134,6 +134,11 @@ class LeRobotV3Recorder:
     def add_frame(self, observation: dict[str, np.ndarray], action: np.ndarray) -> None:
         if not self.recording:
             return
+        action = np.asarray(action, dtype=np.float32)
+        if action.shape != (len(JOINT_NAMES),):
+            raise ValueError(
+                f"Recorded action must contain {len(JOINT_NAMES)} joint targets"
+            )
         frame = {
             "task": self.task,
             "observation.state": observation["observation.state"].copy(),
@@ -143,7 +148,7 @@ class LeRobotV3Recorder:
                 "observation.eef_orientation"
             ].copy(),
             "observation.images.wrist": observation["observation.images.wrist"].copy(),
-            "action": np.asarray(action, dtype=np.float32).copy(),
+            "action": action.copy(),
         }
         self.dataset.add_frame(frame)
         self.frames_in_episode += 1

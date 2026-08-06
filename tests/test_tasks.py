@@ -312,3 +312,30 @@ def test_controller_auto_saves_success_and_resets(tmp_path) -> None:
         assert controller._render_requested.is_set()
     finally:
         env.close()
+
+
+def test_scripted_recording_waits_for_program_completion(tmp_path) -> None:
+    registry = TaskRegistry(TASKS_ROOT)
+    task = registry.get("cube_in_bowl")
+    controller = WorkshopController(
+        RuntimeConfig(data_root=tmp_path, tasks_root=TASKS_ROOT),
+        task_registry=registry,
+    )
+    env = SO101WorkshopEnv(task=task, render_mode=None)
+    recorder = _FakeRecorder()
+    try:
+        env.reset()
+        env._task_success_latched = True
+        controller.env = env
+        controller._selected_task = task
+        controller._recorder = recorder  # type: ignore[assignment]
+        controller._episode_started_at = time.monotonic()
+        controller._scripted_recording = True
+
+        controller._update_episode_lifecycle()
+
+        assert recorder.recording is True
+        assert recorder.saved is None
+        assert env.task_status()["success"] is True
+    finally:
+        env.close()

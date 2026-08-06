@@ -11,10 +11,12 @@ services:
     volumes:
       - ./data:/workspace/data
       - ./tasks:/workspace/tasks:ro
+      - ./trajectories:/workspace/trajectories:ro
     environment:
       MUJOCO_GL: osmesa
       ROSPIN_DATA_ROOT: /workspace/data
       ROSPIN_TASKS_DIR: /workspace/tasks
+      ROSPIN_TRAJECTORIES_DIR: /workspace/trajectories
       ROSPIN_CONTROL_HZ: "60"
       ROSPIN_CAMERA_HZ: "25"
       ROSPIN_IMAGE_WIDTH: "640"

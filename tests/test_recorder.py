@@ -20,9 +20,12 @@ def test_lerobot_v3_feature_schema(tmp_path) -> None:
     assert features["observation.images.wrist"]["shape"] == (480, 640, 3)
     assert "observation.images.perspective" not in features
     assert features["observation.eef_orientation"]["shape"] == (4,)
-    assert features["action"]["shape"] == (9,)
-    assert features["action"]["names"][4:6] == [
-        "shoulder_lift_delta",
-        "elbow_flex_delta",
+    assert features["action"]["shape"] == (6,)
+    assert features["action"]["names"] == [
+        "shoulder_pan",
+        "shoulder_lift",
+        "elbow_flex",
+        "wrist_flex",
+        "wrist_roll",
+        "gripper",
     ]
-    assert features["action"]["names"][-1] == "gripper_command"

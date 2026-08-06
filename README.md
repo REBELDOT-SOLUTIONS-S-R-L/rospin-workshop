@@ -6,6 +6,7 @@ A portable, browser-operated robotics workshop stack:
 - keyboard teleoperation plus optional physical SO-101 leader control
 - wrist camera observations and a movable perspective viewer
 - local LeRobot v3.0 episode recording
+- participant-authored Python trajectories for synthetic demonstrations
 - local ACT policy training through `lerobot-train`
 - one Docker workflow for Windows and macOS participants
 
@@ -168,6 +169,85 @@ Task YAML cannot contain arbitrary MJCF or file paths. A new task needs only a
 YAML file when all required catalogue objects and success predicates already
 exist; a genuinely new mechanism first needs a reusable catalogue entry.
 
+## Write and generate synthetic trajectories
+
+Task YAML remains responsible for the scene, randomized object placement, and
+success predicate. Participant behavior lives in ordinary Python files under
+`trajectories/`. That directory is mounted read-only into the running
+container, so editing a trajectory never requires rebuilding or restarting the
+app.
+
+Copy `trajectories/template.py` and define one decorated function:
+
+```python
+from rospin_workshop.trajectory import EpisodeContext, trajectory
+
+
+@trajectory(task="cube_in_bowl")
+def run(ctx: EpisodeContext) -> None:
+    cube = ctx.object_position("cube")
+    bowl = ctx.object_position("bowl")
+
+    ctx.open_gripper()
+    ctx.move_to(cube + [0.012, 0.0, 0.076], name="approach")
+    ctx.move_linear(
+        cube + [0.012, 0.0, -0.004],
+        allow_contact=True,
+        name="grasp",
+    )
+    ctx.close_gripper(until_contact=True)
+    ctx.move_relative(z=0.10, name="lift")
+    ctx.move_to(bowl + [0.0, 0.0, 0.13], name="transfer")
+    ctx.open_gripper()
+    ctx.move_relative(z=0.10, name="retreat")
+    ctx.move_home()
+```
+
+Every phase starts from the measured robot state. `move_to()` uses a
+vertical-horizontal-vertical tabletop-safe path, `move_linear()` follows a
+straight Cartesian segment, and `move_relative()` resolves its endpoint when
+the phase begins. Joint-space movement, force-limited gripper commands, waits,
+settling checks, assertions, seeded randomness through `ctx.rng`, and
+`move_home()` are also available. Intended grasp or placement contact must be
+explicit with `allow_contact=True`; free-space phases fail if they cannot reach
+their target.
+
+The SO-101 has five arm joints and therefore cannot satisfy an arbitrary
+six-dimensional XYZ-plus-quaternion goal. The initial API plans XYZ while
+maintaining a continuous nearby arm posture. Participants can use
+`move_joints()` when a particular arm orientation is required.
+
+With the workshop app running, preview one seeded execution in the existing
+browser viewer without recording:
+
+```bash
+docker compose exec -T workshop \
+  rospin-generate cube_in_bowl.py --preview --seed 13
+```
+
+Generate a finalized dataset:
+
+```bash
+docker compose exec -T workshop \
+  rospin-generate cube_in_bowl.py \
+  --episodes 100 --seed 1000 --dataset-name team_cube
+```
+
+The default batch runner preflights each seeded episode without recording,
+resets with the same seed, and records only after the program has proved it can
+complete. During recording, task auto-save is deferred until the complete
+program—including retreat and return home—has run. The YAML success predicate
+then decides whether the episode is saved or discarded. Use `--no-preflight`
+only when generation speed matters more than rejecting failures before video
+encoding.
+
+The convenience wrappers provide the same operations:
+
+```bash
+./scripts/workshop.sh preview cube_in_bowl.py 1 13
+./scripts/workshop.sh generate cube_in_bowl.py 100 1000
+```
+
 ## Record a local LeRobot v3 dataset
 
 The recording controls deliberately separate episode and dataset boundaries:
@@ -192,7 +272,7 @@ Every frame contains:
 | `observation.eef_position` | `(3,)` | end-effector xyz |
 | `observation.eef_orientation` | `(4,)` | end-effector quaternion, wxyz |
 | `observation.images.wrist` | `(H, W, 3)` | wrist RGB, H.264 video |
-| `action` | `(9,)` | translation, direct-joint rotation, and gripper command |
+| `action` | `(6,)` | commanded positions for the six SO-101 joints |
 
 Physics and keyboard input run at 60 Hz independently from two camera-specific
 render workers. The workers use separate software-rendering contexts and are
@@ -201,7 +281,10 @@ the larger perspective view takes longer to render. Only the wrist worker's
 frame is handed to the recorder; the movable perspective image remains a live
 browser view and is never included in the dataset. Each saved row combines
 state, action, and its 640×480 wrist frame from the same 25 Hz simulation
-snapshot; key transitions do not inject extra off-cadence rows. Both scene
+snapshot. Keyboard, physical leader, and synthetic planner commands are all
+converted to the same six absolute joint targets before recording, matching
+the command interface of the physical SO-101. Key transitions do not inject
+extra off-cadence rows. Both scene
 lights have shadows disabled and glossy material reflections are removed
 because their redundant software-rendering passes prevent reliable 25 Hz
 capture without helping workshop control.
@@ -348,6 +431,7 @@ Set environment variables in `compose.yaml`:
 | `ROSPIN_IMAGE_HEIGHT` | `480` | wrist preview and recorded-video height |
 | `ROSPIN_DATA_ROOT` | `/workspace/data` | datasets and training outputs |
 | `ROSPIN_TASKS_DIR` | `/workspace/tasks` | read-only task YAML directory |
+| `ROSPIN_TRAJECTORIES_DIR` | `/workspace/trajectories` | hot-loaded participant Python directory |
 | `ROSPIN_REMOTE_PORT` | unset | optional SO-101 leader serial device |
 | `ROSPIN_REMOTE_HZ` | `60` | optional SO-101 leader polling rate |
 | `ROSPIN_SO101_ASSET_DIR` | auto-detected | vendored SO-101 URDF directory |
