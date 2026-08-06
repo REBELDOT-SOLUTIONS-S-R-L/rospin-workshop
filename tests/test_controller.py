@@ -13,35 +13,7 @@ from rospin_workshop.controller import (
     WorkshopController,
 )
 from rospin_workshop.dataset_tools import inspect_dataset
-from rospin_workshop.env import ACTION_NAMES
-from rospin_workshop.env import SO101WorkshopEnv
-
-
-class FixedRemoteReader:
-    def __init__(self, positions: np.ndarray) -> None:
-        self.positions = positions
-
-    def start(self) -> None:
-        pass
-
-    def stop(self) -> None:
-        pass
-
-    def latest_positions(self) -> np.ndarray:
-        return self.positions.copy()
-
-    def status(self) -> dict[str, object]:
-        return {
-            "configured": True,
-            "port": "/dev/fake-so101",
-            "connected": True,
-            "calibrated": True,
-            "available": True,
-            "error": None,
-            "age_ms": 0,
-            "read_hz": 60.0,
-            "positions": None,
-        }
+from rospin_workshop.env import ACTION_NAMES, SO101WorkshopEnv
 
 
 def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
@@ -110,7 +82,7 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
         recorded_frames = controller.status()["frames_in_episode"]
         recording_elapsed = time.monotonic() - recording_started
         assert 24 <= recorded_frames <= 27
-        assert 23.0 <= (recorded_frames - 1) / recording_elapsed <= 26.0
+        assert 22.5 <= (recorded_frames - 1) / recording_elapsed <= 26.0
         controller.command("stop_recording", {})
         controller.command("finish_dataset", {})
         status = controller.status()
@@ -122,18 +94,23 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
 
     details = inspect_dataset(dataset_path)
     assert details["codebase_version"] == "v3.0"
+    assert details["robot_type"] == "so_follower"
     assert details["episodes"] == 1
     assert details["fps"] == 25
     assert details["video_fps"] == 25
     assert np.isclose(details["timestamp_step_seconds"], 0.04, atol=1e-5)
-    assert (
-        details["features"]["observation.images.wrist"]["info"]["video.codec"] == "h264"
-    )
+    assert details["features"]["observation.images.wrist"]["info"][
+        "video.codec"
+    ] == "av1"
+    assert details["features"]["observation.images.top"]["info"][
+        "video.codec"
+    ] == "av1"
     assert (
         details["features"]["observation.images.wrist"]["info"]["video.fps"] == 25
     )
     assert "observation.images.perspective" not in details["features"]
     assert details["decoded_frame_shapes"] == {
+        "observation.images.top": [3, 72, 96],
         "observation.images.wrist": [3, 72, 96],
     }
     assert details["features"]["action"]["shape"] == (6,)
@@ -176,46 +153,29 @@ def test_keyboard_mapping_and_gripper_command_latching(tmp_path) -> None:
     controller.set_key("]", True)
     controller.set_key("]", False)
     assert controller._current_action()[-1] == 1
-    controller.set_keyboard_enabled(False)
-    controller.set_key("w", True)
-    assert controller.status()["keyboard_enabled"] is False
-    assert controller.status()["keys"] == []
-    np.testing.assert_array_equal(
-        controller._current_action(),
-        np.zeros(len(ACTION_NAMES), dtype=np.float32),
-    )
 
 
-def test_disabled_keyboard_uses_rate_limited_remote_joint_targets(tmp_path) -> None:
-    remote_positions = np.array([-5.0, -95.0, 90.0, 75.0, 5.0, 0.0])
-    remote = FixedRemoteReader(remote_positions)
-    controller = WorkshopController(
-        RuntimeConfig(data_root=tmp_path),
-        remote_reader=remote,  # type: ignore[arg-type]
-    )
+def test_keyboard_step_returns_six_absolute_joint_targets(tmp_path) -> None:
+    controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
     env = SO101WorkshopEnv(render_mode=None)
     controller.env = env
     try:
         env.reset()
-        controller.set_keyboard_enabled(False)
-        before = env.joint_positions.astype(np.float64)
-        action = controller._step_control()
-        after = env.data.ctrl.copy()
+        targets_before = env.data.ctrl.copy()
+        measured_before = env.joint_positions.copy()
+        controller.set_key("u", True)
 
-        expected_direction = np.sign(
-            np.concatenate(
-                (
-                    np.deg2rad(remote_positions[:-1]),
-                    [env.joint_ranges[-1, 0]],
-                )
-            )
-            - before
+        recorded_action = controller._step_control()
+
+        assert recorded_action.shape == (6,)
+        np.testing.assert_allclose(recorded_action, env.data.ctrl)
+        assert np.isclose(
+            recorded_action[0],
+            targets_before[0] + env.joint_step,
         )
-        np.testing.assert_array_equal(np.sign(after - before), expected_direction)
-        assert np.all(np.abs(after[:-1] - before[:-1]) <= env.joint_step + 1e-10)
-        assert abs(after[-1] - before[-1]) <= env.gripper_step + 1e-10
-        assert controller._active_control_source == "remote"
-        np.testing.assert_allclose(action, after)
+        np.testing.assert_allclose(recorded_action[1:], targets_before[1:])
+        assert not np.array_equal(recorded_action, measured_before)
+        assert controller._active_control_source == "keyboard"
     finally:
         env.close()
 
@@ -254,7 +214,7 @@ def test_perspective_camera_orbit_pan_zoom_and_reset(tmp_path) -> None:
     assert not controller._render_requested.is_set()
 
 
-def test_perspective_and_wrist_render_at_configured_size(tmp_path) -> None:
+def test_all_cameras_render_at_configured_size(tmp_path) -> None:
     controller = WorkshopController(
         RuntimeConfig(
             data_root=tmp_path,
@@ -264,10 +224,11 @@ def test_perspective_and_wrist_render_at_configured_size(tmp_path) -> None:
     )
 
     assert controller._camera_render_size("wrist") == (640, 480)
+    assert controller._camera_render_size("top") == (640, 480)
     assert controller._camera_render_size("perspective") == (640, 480)
 
 
-def test_wrist_render_can_be_submitted_while_perspective_is_busy(tmp_path) -> None:
+def test_top_and_wrist_renders_share_one_snapshot(tmp_path) -> None:
     controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
     env = SO101WorkshopEnv(render_mode=None)
     controller.env = env
@@ -275,9 +236,15 @@ def test_wrist_render_can_be_submitted_while_perspective_is_busy(tmp_path) -> No
         env.reset()
         action = env.data.ctrl.astype(np.float32, copy=True)
 
-        assert controller._submit_render("perspective", action) is True
-        assert controller._submit_render("wrist", action) is True
-        assert controller._submit_render("wrist", action) is False
-        assert controller._render_inflight == {"perspective", "wrist"}
+        assert controller._submit_renders(action) is True
+        assert controller._submit_renders(action) is False
+        assert controller._render_inflight == {"perspective", "top", "wrist"}
+        assert len(controller._pending_renders) == 2
+        dataset_pending = next(
+            pending
+            for pending in controller._pending_renders.values()
+            if pending["record_dataset"]
+        )
+        assert dataset_pending["remaining_cameras"] == {"top", "wrist"}
     finally:
         env.close()

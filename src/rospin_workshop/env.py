@@ -23,7 +23,7 @@ JOINT_NAMES = (
     "gripper",
 )
 ARM_JOINT_NAMES = JOINT_NAMES[:-1]
-CAMERA_NAMES = ("wrist", "perspective")
+CAMERA_NAMES = ("wrist", "top", "perspective")
 ACTION_NAMES = (
     "eef_dx",
     "eef_dy",
@@ -264,6 +264,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             observation_spaces.update(
                 {
                     "observation.images.wrist": image_space(),
+                    "observation.images.top": image_space(),
                     "observation.images.perspective": image_space(),
                 }
             )
@@ -368,6 +369,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
         observation.update(
             {
                 "observation.images.wrist": images["wrist"],
+                "observation.images.top": images["top"],
                 "observation.images.perspective": images["perspective"],
             }
         )
@@ -576,8 +578,9 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             ranges[:, 0],
             ranges[:, 1],
         )
-        # Absolute remote targets and normalized keyboard deltas have separate
-        # transition semantics. A later keyboard command should start cleanly.
+        # Absolute trajectory targets and normalized keyboard deltas have
+        # separate transition semantics. A later keyboard command should
+        # start cleanly.
         self._previous_action.fill(0)
         for _ in range(self._physics_steps):
             mujoco.mj_step(self.model, self.data)
@@ -603,6 +606,7 @@ class SO101WorkshopEnv(gym.Env[dict[str, np.ndarray], np.ndarray]):
             observation.update(
                 {
                     "observation.images.wrist": images["wrist"],
+                    "observation.images.top": images["top"],
                     "observation.images.perspective": images["perspective"],
                 }
             )

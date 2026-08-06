@@ -154,10 +154,10 @@ def main() -> None:
             recorder.stop_episode(save=True)
             dataset_path = recorder.finalize()
             dataset = inspect_dataset(dataset_path)
-            if "observation.images.perspective" in dataset["features"]:
-                raise RuntimeError("Viewer-only perspective camera entered the dataset")
+            if "observation.images.top" not in dataset["features"]:
+                raise RuntimeError("Dataset is missing the real-schema top camera")
             if dataset["fps"] != 25 or dataset["video_fps"] != 25:
-                raise RuntimeError("Dataset and wrist video are not both 25 FPS")
+                raise RuntimeError("Dataset videos are not all 25 FPS")
             if tuple(dataset["features"]["action"]["shape"]) != (
                 len(JOINT_NAMES),
             ):
@@ -192,6 +192,9 @@ def main() -> None:
                     "fps": dataset["fps"],
                     "timestamp_step_seconds": dataset["timestamp_step_seconds"],
                     "video_codecs": {
+                        "observation.images.top": dataset["features"][
+                            "observation.images.top"
+                        ]["info"]["video.codec"],
                         "observation.images.wrist": dataset["features"][
                             "observation.images.wrist"
                         ]["info"]["video.codec"]

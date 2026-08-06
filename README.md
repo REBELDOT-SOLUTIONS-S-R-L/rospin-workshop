@@ -3,8 +3,8 @@
 A portable, browser-operated robotics workshop stack:
 
 - MuJoCo physics with a custom Gymnasium environment
-- keyboard teleoperation plus optional physical SO-101 leader control
-- wrist camera observations and a movable perspective viewer
+- keyboard teleoperation
+- fixed top and wrist camera observations plus a movable perspective viewer
 - local LeRobot v3.0 episode recording
 - participant-authored Python trajectories for synthetic demonstrations
 - local ACT policy training through `lerobot-train`
@@ -99,7 +99,9 @@ camera is viewer-only: changing its pose never enters a recording.
 The camera workspace occupies the top of the page, with equally sized 640×480
 perspective and wrist views. The teleoperation, local-recording, and
 session-status cards sit below the camera workspace without internal scrolling.
-The wrist view is the only image written to the dataset.
+The wrist image and a fixed copy of the default perspective pose are recorded
+as `observation.images.wrist` and `observation.images.top`. Moving the browser
+perspective camera does not move the recorded top camera.
 
 Full-scale held keys command at most 12 cm/s translation or 0.8 rad/s joint
 motion, independent of the configured control rate. Releasing all arm-control
@@ -109,37 +111,6 @@ latched: one press targets the corresponding joint limit and release does not
 interrupt the full open/close motion. The target is not shortened for a
 particular object size; an explicit 0.08 N·m actuator-force cap lets contact
 stop the jaw gently at the width of the object being grasped.
-
-### Physical SO-101 remote
-
-On the Linux workstation with the SO-101 leader at `/dev/ttyUSB0`, start the
-hardware-enabled stack with:
-
-```bash
-docker compose -f compose.yaml -f compose.remote.yaml up -d --build
-```
-
-The base `compose.yaml` deliberately contains no USB device mapping, so the
-same project still starts on workshop laptops that do not have the remote.
-`compose.remote.yaml` passes `/dev/ttyUSB0` into the container and sets
-`ROSPIN_REMOTE_PORT`.
-
-The app reads the leader's existing calibration directly from its six motor
-registers and immediately disables torque. It never launches LeRobot's
-interactive calibration flow. USB reads run on a separate thread and reconnect
-automatically, so an unplugged remote cannot stall MuJoCo or recording.
-
-The **Keyboard controls** switch in the Session status card selects the control
-mode:
-
-- On: keyboard commands control the simulation and remote readings are ignored.
-- Off: the simulation follows all six calibrated remote joints. If the remote
-  is disconnected or its data becomes stale, the simulation holds position.
-
-The status card shows `keyboard`, `remote`, or `hold` as the active source and
-reports the remote connection/read rate. Arm values are converted from degrees
-to MuJoCo radians; the remote gripper's calibrated 0–100 value maps across the
-simulated gripper range. Targets are rate-limited when changing modes.
 
 ## Select a workshop task
 
@@ -267,27 +238,35 @@ Every frame contains:
 
 | LeRobot feature | Shape | Meaning |
 |---|---:|---|
-| `observation.state` | `(6,)` | six joint positions |
-| `observation.velocity` | `(6,)` | six joint velocities |
-| `observation.eef_position` | `(3,)` | end-effector xyz |
-| `observation.eef_orientation` | `(4,)` | end-effector quaternion, wxyz |
-| `observation.images.wrist` | `(H, W, 3)` | wrist RGB, H.264 video |
-| `action` | `(6,)` | commanded positions for the six SO-101 joints |
+| `observation.state` | `(6,)` | measured SO-101 positions in real-robot units |
+| `observation.images.top` | `(H, W, 3)` | fixed top RGB, AV1 video |
+| `observation.images.wrist` | `(H, W, 3)` | wrist RGB, AV1 video |
+| `action` | `(6,)` | commanded SO-101 targets in real-robot units |
 
-Physics and keyboard input run at 60 Hz independently from two camera-specific
-render workers. The workers use separate software-rendering contexts and are
-scheduled independently, keeping the recorded wrist stream at 25 FPS even when
-the larger perspective view takes longer to render. Only the wrist worker's
-frame is handed to the recorder; the movable perspective image remains a live
-browser view and is never included in the dataset. Each saved row combines
-state, action, and its 640×480 wrist frame from the same 25 Hz simulation
-snapshot. Keyboard, physical leader, and synthetic planner commands are all
-converted to the same six absolute joint targets before recording, matching
-the command interface of the physical SO-101. Key transitions do not inject
-extra off-cadence rows. Both scene
+Physics and keyboard input run at 60 Hz independently from three camera-specific
+render workers. The fixed top and wrist workers render the same simulation
+snapshot and are recorded together at 25 FPS. The movable perspective worker
+remains independent, so a slow browser view cannot delay dataset capture. Each
+saved row combines state, action, and synchronized 640×480 top and wrist frames.
+Keyboard and synthetic planner commands are both converted to the same six
+absolute joint targets before recording. The action is the target sent to the
+simulated motors, while `observation.state` is the six measured joint positions
+at that snapshot. For example, if a joint is currently at 180° and a keyboard
+step requests 181°, the stored observation is 180 and the action is 181—not the
+1° delta. Key transitions do not inject extra off-cadence rows. Both scene
 lights have shadows disabled and glossy material reflections are removed
 because their redundant software-rendering passes prevent reliable 25 Hz
 capture without helping workshop control.
+
+MuJoCo continues to use radians internally. At recording time, the five arm
+joints are converted to the calibrated degree convention used by the real
+dataset. This includes inverting the source task's `−π/2` wrist-roll frame
+correction. The gripper is mapped from simulated `[-10°, 100°]` to calibrated
+`[0, 100]`. Both feature name lists use the real dataset's `shoulder_pan.pos`
+through `gripper.pos` convention, and the dataset declares
+`robot_type: so_follower`. The stored schema therefore matches
+`/home/roboticslab/datasets/single_so101_cubes` and does not include
+simulator-only velocity or end-effector features.
 
 Datasets are never pushed to Hugging Face Hub. Because v3 metadata does not
 serialize `repo_id`, the tools deterministically use `local/<dataset-directory>`
@@ -426,14 +405,12 @@ Set environment variables in `compose.yaml`:
 | Variable | Default | Purpose |
 |---|---:|---|
 | `ROSPIN_CONTROL_HZ` | `60` | simulation physics and keyboard command rate |
-| `ROSPIN_CAMERA_HZ` | `25` | wrist preview and dataset FPS; perspective is best-effort |
+| `ROSPIN_CAMERA_HZ` | `25` | synchronized top/wrist dataset FPS; perspective is best-effort |
 | `ROSPIN_IMAGE_WIDTH` | `640` | wrist preview and recorded-video width |
 | `ROSPIN_IMAGE_HEIGHT` | `480` | wrist preview and recorded-video height |
 | `ROSPIN_DATA_ROOT` | `/workspace/data` | datasets and training outputs |
 | `ROSPIN_TASKS_DIR` | `/workspace/tasks` | read-only task YAML directory |
 | `ROSPIN_TRAJECTORIES_DIR` | `/workspace/trajectories` | hot-loaded participant Python directory |
-| `ROSPIN_REMOTE_PORT` | unset | optional SO-101 leader serial device |
-| `ROSPIN_REMOTE_HZ` | `60` | optional SO-101 leader polling rate |
 | `ROSPIN_SO101_ASSET_DIR` | auto-detected | vendored SO-101 URDF directory |
 | `MUJOCO_GL` | `osmesa` | CPU headless OpenGL backend |
 

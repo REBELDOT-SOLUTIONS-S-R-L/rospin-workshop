@@ -138,11 +138,6 @@
       border-color: var(--cyan);
       box-shadow: 0 0 0 3px #4de1d122, 0 20px 65px #0008;
     }
-    .teleop.keyboard-disabled kbd { opacity: .42; }
-    .teleop.keyboard-disabled:focus {
-      border-color: var(--line);
-      box-shadow: 0 20px 65px #0008;
-    }
     .teleop h2, aside h2 { margin: 0 0 13px; font-size: 13px; text-transform: uppercase; letter-spacing: .1em; }
     .keys { display: flex; flex-wrap: wrap; gap: 8px; }
     kbd {
@@ -181,27 +176,6 @@
     .status-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .badge { padding: 5px 8px; border-radius: 999px; background: #1a2738; color: var(--muted); font-size: 11px; }
     .badge.recording { color: #ffdbe1; background: #752538; animation: pulse 1.2s infinite; }
-    .control-toggle {
-      display: flex; align-items: center; justify-content: space-between; gap: 16px;
-      margin-top: 16px; padding: 12px; border: 1px solid #2d3e53;
-      border-radius: 11px; background: #0b121d;
-    }
-    .toggle-title { color: var(--text); font-size: 12px; font-weight: 700; }
-    .toggle-description { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }
-    .switch { position: relative; display: inline-block; flex: 0 0 auto; width: 44px; height: 24px; margin: 0; }
-    .switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-    .switch-track {
-      position: absolute; inset: 0; border-radius: 999px; cursor: pointer;
-      background: #35445a; transition: .18s ease;
-    }
-    .switch-track::before {
-      content: ""; position: absolute; width: 18px; height: 18px;
-      left: 3px; top: 3px; border-radius: 50%; background: #d9e6f4;
-      transition: .18s ease;
-    }
-    .switch input:checked + .switch-track { background: #1677cc; }
-    .switch input:checked + .switch-track::before { transform: translateX(20px); }
-    .switch input:focus-visible + .switch-track { box-shadow: 0 0 0 3px #4da3ff55; }
     @keyframes pulse { 50% { box-shadow: 0 0 0 6px #ff637d16; } }
     .message { color: #c3d1e1; font-size: 13px; line-height: 1.5; margin: 13px 0 0; overflow-wrap: anywhere; }
     .message.error { color: #ff8fa1; }
@@ -334,21 +308,9 @@
           <h2 style="margin:0">Session status</h2>
           <span id="recordingBadge" class="badge">idle</span>
         </div>
-        <div class="control-toggle">
-          <div>
-            <div class="toggle-title">Keyboard controls</div>
-            <div class="toggle-description">Turn off to follow the physical SO-101 remote.</div>
-          </div>
-          <label class="switch" title="Enable or disable keyboard controls">
-            <input id="keyboardToggle" type="checkbox" checked
-                   aria-label="Enable keyboard controls">
-            <span class="switch-track"></span>
-          </label>
-        </div>
         <p id="message" class="message">Waiting for simulation…</p>
         <dl>
           <dt>Control source</dt><dd id="controlSource">keyboard</dd>
-          <dt>SO-101 remote</dt><dd id="remoteStatus">checking…</dd>
           <dt>Wrist recording</dt><dd id="recordingFormat">640 × 480 · 25 FPS</dd>
           <dt>Episode frames</dt><dd id="frames">0</dd>
           <dt>Episode timer</dt><dd id="episodeTimer">—</dd>
@@ -375,7 +337,6 @@
     const pressed = new Set();
     const teleopPanel = document.querySelector("#teleopPanel");
     const keyboardHint = document.querySelector("#keyboardHint");
-    const keyboardToggle = document.querySelector("#keyboardToggle");
     const perspectiveViewport = document.querySelector("#perspectiveViewport");
     let socket;
     let status = {};
@@ -454,10 +415,6 @@
     }
 
     function focusTeleop() {
-      if (status.keyboard_enabled === false) {
-        keyboardHint.textContent = "Keyboard controls are disabled. Turn them on in Session status to use these keys.";
-        return;
-      }
       teleopPanel.focus({preventScroll: true});
       keyboardHint.textContent = "Keyboard control ready. Multiple movement keys may be held together.";
     }
@@ -548,32 +505,7 @@
       document.querySelector("#recordingFormat").textContent = next.image_size
         ? `${next.image_size[0]} × ${next.image_size[1]} · ${next.camera_hz} FPS`
         : "640 × 480 · 25 FPS";
-      const keyboardEnabled = next.keyboard_enabled !== false;
-      keyboardToggle.checked = keyboardEnabled;
-      teleopPanel.classList.toggle("keyboard-disabled", !keyboardEnabled);
-      teleopPanel.setAttribute("aria-disabled", String(!keyboardEnabled));
       document.querySelector("#controlSource").textContent = next.active_control_source || "—";
-      const remote = next.remote || {};
-      let remoteText = "not configured";
-      if (remote.configured) {
-        if (remote.available) {
-          remoteText = `connected${remote.read_hz ? ` · ${remote.read_hz.toFixed(1)} Hz` : ""}`;
-        } else if (remote.connected) {
-          remoteText = "connected · waiting for data";
-        } else if (remote.error) {
-          remoteText = "reconnecting";
-        } else {
-          remoteText = "connecting";
-        }
-      }
-      const remoteStatus = document.querySelector("#remoteStatus");
-      remoteStatus.textContent = remoteText;
-      remoteStatus.title = remote.error || remote.port || "";
-      if (!keyboardEnabled) {
-        keyboardHint.textContent = next.active_control_source === "remote"
-          ? "Keyboard disabled. The simulated robot is following the physical SO-101 remote."
-          : "Keyboard disabled. Holding position while the SO-101 remote is unavailable.";
-      }
       const camera = next.perspective_camera;
       document.querySelector("#cameraPose").textContent = camera
         ? `az ${camera.azimuth_degrees.toFixed(1)}° · el ${camera.elevation_degrees.toFixed(1)}° · ${camera.distance.toFixed(2)} m`
@@ -593,7 +525,6 @@
       const key = event.key.toLowerCase();
       if (!movementKeys.has(key) || event.target.matches("input, textarea, select")) return;
       event.preventDefault();
-      if (status.keyboard_enabled === false) return;
       if (pressed.has(key)) return;
       pressed.add(key);
       showKeyState(key, true);
@@ -620,12 +551,6 @@
         keyboardHint.textContent = "Keyboard control paused while editing text. Click the control panel to resume.";
       });
     });
-    keyboardToggle.addEventListener("change", () => {
-      pressed.clear();
-      document.querySelectorAll("kbd[data-key]").forEach(key => key.classList.remove("active"));
-      send({type: "keyboard_control", enabled: keyboardToggle.checked});
-    });
-
     perspectiveViewport.addEventListener("pointerdown", event => {
       if (event.button !== 0 || event.target.closest("button")) return;
       event.preventDefault();

@@ -87,6 +87,11 @@
     <camera name="perspective" pos="0.2 1 1.38"
             xyaxes="-0.955157326174 0.296098771114 0 -0.143488561987 -0.46286632899 0.874737557251"
             fovy="48"/>
+    <!-- Fixed copy recorded as observation.images.top. Browser orbit controls
+         move only perspective, so workshop viewing cannot alter the dataset. -->
+    <camera name="top" pos="0.2 1 1.38"
+            xyaxes="-0.955157326174 0.296098771114 0 -0.143488561987 -0.46286632899 0.874737557251"
+            fovy="48"/>
 
     <!-- Mount the URDF base toward the back edge and face it 90 degrees
          clockwise, into the usable -Y half of the table. Keeping this scene

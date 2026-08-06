@@ -10,6 +10,38 @@ import numpy as np
 from rospin_workshop.env import JOINT_NAMES
 
 DEFAULT_TASK = "unspecified manipulation task"
+MOTOR_POSITION_NAMES = tuple(f"{name}.pos" for name in JOINT_NAMES)
+
+# The reference recording was made with LeRobot ``use_degrees=true``: the five
+# arm values are calibrated degrees, while the gripper is calibrated to 0–100.
+# This scene came from a LeIsaac task that applies a -pi/2 simulator-frame
+# correction to wrist roll, so invert that offset when exporting motor values.
+SIM_GRIPPER_CLOSED_RAD = np.deg2rad(-10.0)
+SIM_GRIPPER_OPEN_RAD = np.deg2rad(100.0)
+SIM_JOINT_OFFSETS_RADIANS = np.array(
+    [0.0, 0.0, 0.0, 0.0, -np.pi / 2.0, 0.0],
+    dtype=np.float64,
+)
+
+
+def simulation_to_real_motor_positions(values: np.ndarray) -> np.ndarray:
+    """Convert six MuJoCo joint angles to the real LeRobot SO-101 convention."""
+
+    values = np.asarray(values, dtype=np.float64)
+    if values.shape != (len(JOINT_NAMES),):
+        raise ValueError(
+            f"Motor positions must contain {len(JOINT_NAMES)} values"
+        )
+    if not np.all(np.isfinite(values)):
+        raise ValueError("Motor positions must all be finite")
+    converted = np.rad2deg(values - SIM_JOINT_OFFSETS_RADIANS)
+    converted[-1] = (
+        (values[-1] - SIM_GRIPPER_CLOSED_RAD)
+        / (SIM_GRIPPER_OPEN_RAD - SIM_GRIPPER_CLOSED_RAD)
+        * 100.0
+    )
+    converted[-1] = np.clip(converted[-1], 0.0, 100.0)
+    return converted.astype(np.float32)
 
 
 def _safe_name(value: str) -> str:
@@ -47,22 +79,12 @@ class LeRobotV3Recorder:
             "observation.state": {
                 "dtype": "float32",
                 "shape": (len(JOINT_NAMES),),
-                "names": list(JOINT_NAMES),
+                "names": list(MOTOR_POSITION_NAMES),
             },
-            "observation.velocity": {
-                "dtype": "float32",
-                "shape": (len(JOINT_NAMES),),
-                "names": list(JOINT_NAMES),
-            },
-            "observation.eef_position": {
-                "dtype": "float32",
-                "shape": (3,),
-                "names": ["x", "y", "z"],
-            },
-            "observation.eef_orientation": {
-                "dtype": "float32",
-                "shape": (4,),
-                "names": ["w", "x", "y", "z"],
+            "observation.images.top": {
+                "dtype": "video",
+                "shape": image_shape,
+                "names": ["height", "width", "channels"],
             },
             "observation.images.wrist": {
                 "dtype": "video",
@@ -72,7 +94,7 @@ class LeRobotV3Recorder:
             "action": {
                 "dtype": "float32",
                 "shape": (len(JOINT_NAMES),),
-                "names": list(JOINT_NAMES),
+                "names": list(MOTOR_POSITION_NAMES),
             },
         }
 
@@ -101,16 +123,10 @@ class LeRobotV3Recorder:
             repo_id=self.repo_id,
             root=root,
             fps=self.fps,
-            robot_type="so101_mujoco",
+            robot_type="so_follower",
             features=self.features,
             use_videos=True,
-            rgb_encoder=RGBEncoderConfig(
-                vcodec="h264",
-                pix_fmt="yuv420p",
-                g=self.fps,
-                crf=23,
-                preset="veryfast",
-            ),
+            rgb_encoder=RGBEncoderConfig(),
             streaming_encoding=True,
             encoder_queue_maxsize=max(30, self.fps * 5),
             encoder_threads=2,
@@ -134,21 +150,14 @@ class LeRobotV3Recorder:
     def add_frame(self, observation: dict[str, np.ndarray], action: np.ndarray) -> None:
         if not self.recording:
             return
-        action = np.asarray(action, dtype=np.float32)
-        if action.shape != (len(JOINT_NAMES),):
-            raise ValueError(
-                f"Recorded action must contain {len(JOINT_NAMES)} joint targets"
-            )
+        state = simulation_to_real_motor_positions(observation["observation.state"])
+        action = simulation_to_real_motor_positions(action)
         frame = {
             "task": self.task,
-            "observation.state": observation["observation.state"].copy(),
-            "observation.velocity": observation["observation.velocity"].copy(),
-            "observation.eef_position": observation["observation.eef_position"].copy(),
-            "observation.eef_orientation": observation[
-                "observation.eef_orientation"
-            ].copy(),
+            "observation.state": state,
+            "observation.images.top": observation["observation.images.top"].copy(),
             "observation.images.wrist": observation["observation.images.wrist"].copy(),
-            "action": action.copy(),
+            "action": action,
         }
         self.dataset.add_frame(frame)
         self.frames_in_episode += 1

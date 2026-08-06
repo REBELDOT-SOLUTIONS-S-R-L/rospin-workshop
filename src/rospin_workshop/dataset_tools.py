@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from rospin_workshop.env import JOINT_NAMES
+from rospin_workshop.recorder import MOTOR_POSITION_NAMES
 
 
 def inspect_dataset(root: Path) -> dict[str, Any]:
@@ -18,6 +19,10 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
         raise ValueError(
             f"Expected LeRobot v3.0, found {info.get('codebase_version')!r}"
         )
+    if info.get("robot_type") != "so_follower":
+        raise ValueError(
+            f"Expected robot_type 'so_follower', found {info.get('robot_type')!r}"
+        )
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -27,34 +32,53 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
     dataset = LeRobotDataset(repo_id=repo_id, root=root, video_backend="pyav")
     required = {
         "observation.state",
-        "observation.eef_position",
-        "observation.eef_orientation",
+        "observation.images.top",
         "observation.images.wrist",
         "action",
     }
     missing = required.difference(dataset.features)
     if missing:
         raise ValueError(f"Dataset is missing required features: {sorted(missing)}")
-    action_feature = dataset.features["action"]
-    if tuple(action_feature["shape"]) != (len(JOINT_NAMES),) or list(
-        action_feature.get("names", [])
-    ) != list(JOINT_NAMES):
+    unexpected_observations = {
+        name
+        for name in dataset.features
+        if name.startswith("observation.") and name not in required
+    }
+    if unexpected_observations:
         raise ValueError(
-            "Dataset action must contain six commanded SO-101 joint positions"
+            "Dataset contains features absent from the real SO-101 schema: "
+            f"{sorted(unexpected_observations)}"
         )
+    for feature_name in ("observation.state", "action"):
+        feature = dataset.features[feature_name]
+        if tuple(feature["shape"]) != (len(JOINT_NAMES),) or list(
+            feature.get("names", [])
+        ) != list(MOTOR_POSITION_NAMES):
+            raise ValueError(
+                f"{feature_name} must contain the six real SO-101 *.pos values"
+            )
     if dataset.num_episodes < 1 or dataset.num_frames < 1:
         raise ValueError("Dataset has no saved frames or episodes")
     sample = dataset[0]
-    camera_key = "observation.images.wrist"
-    expected_h, expected_w, _ = dataset.features[camera_key]["shape"]
-    if tuple(sample[camera_key].shape) != (3, expected_h, expected_w):
-        raise ValueError(f"Could not decode {camera_key} at its declared resolution")
-    video_fps = float(dataset.features[camera_key]["info"]["video.fps"])
-    if not math.isclose(video_fps, float(dataset.fps)):
-        raise ValueError(
-            f"{camera_key} video FPS {video_fps} does not match dataset FPS "
-            f"{dataset.fps}"
-        )
+    video_fps_by_camera: dict[str, float] = {}
+    for camera_key in ("observation.images.top", "observation.images.wrist"):
+        expected_h, expected_w, _ = dataset.features[camera_key]["shape"]
+        if tuple(sample[camera_key].shape) != (3, expected_h, expected_w):
+            raise ValueError(
+                f"Could not decode {camera_key} at its declared resolution"
+            )
+        camera_info = dataset.features[camera_key]["info"]
+        video_fps = float(camera_info["video.fps"])
+        if not math.isclose(video_fps, float(dataset.fps)):
+            raise ValueError(
+                f"{camera_key} video FPS {video_fps} does not match dataset FPS "
+                f"{dataset.fps}"
+            )
+        if camera_info["video.codec"] != "av1":
+            raise ValueError(
+                f"{camera_key} must use AV1 to match the real SO-101 dataset"
+            )
+        video_fps_by_camera[camera_key] = video_fps
 
     timestamp_step_seconds: float | None = None
     first_episode = int(sample["episode_index"])
@@ -78,10 +102,12 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
         "root": str(root.resolve()),
         "repo_id": dataset.repo_id,
         "codebase_version": info["codebase_version"],
+        "robot_type": info["robot_type"],
         "episodes": dataset.num_episodes,
         "frames": dataset.num_frames,
         "fps": dataset.fps,
-        "video_fps": video_fps,
+        "video_fps": video_fps_by_camera["observation.images.wrist"],
+        "video_fps_by_camera": video_fps_by_camera,
         "timestamp_step_seconds": timestamp_step_seconds,
         "features": dataset.features,
         "decoded_frame_shapes": {

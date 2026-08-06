@@ -48,8 +48,8 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         assert 'id="controlRail" class="bottom-panels"' in page
         assert "max-height: none" in page
         assert "overflow: visible" in page
-        assert 'id="keyboardToggle"' in page
-        assert "Turn off to follow the physical SO-101 remote." in page
+        assert 'id="keyboardToggle"' not in page
+        assert "physical SO-101 remote" not in page
         assert "Initializing simulation" in page
         assert "Waiting for simulation" in page
         assert "retryDelay = Math.min(3000, retryDelay * 2)" in page
@@ -87,9 +87,7 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         assert initial["error"] is None
         assert initial["task_ready"] is True
         assert initial["task_id"] == "cube_in_bowl"
-        assert initial["keyboard_enabled"] is True
         assert initial["active_control_source"] == "keyboard"
-        assert initial["remote"]["configured"] is False
         initial_camera = initial["perspective_camera"]
 
         with client.websocket_connect("/ws") as socket:
@@ -183,48 +181,3 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
             closed = client.get("/api/status").json()
             assert closed["joint_targets"][5] < -0.17
             assert abs(closed["gripper_force_nm"]) <= 0.0801
-
-
-def test_websocket_can_disable_and_reenable_keyboard_controls(tmp_path) -> None:
-    app = create_app(
-        RuntimeConfig(
-            data_root=tmp_path,
-            control_hz=20,
-            camera_hz=5,
-            image_width=96,
-            image_height=72,
-        )
-    )
-    with TestClient(app) as client:
-        initial = client.post(
-            "/api/session/task", json={"task_id": "cube_in_bowl"}
-        ).json()
-        with client.websocket_connect("/ws") as socket:
-            socket.send_json({"type": "keyboard_control", "enabled": False})
-            disabled = socket.receive_json()["data"]
-            assert disabled["keyboard_enabled"] is False
-            assert disabled["keys"] == []
-
-            socket.send_json({"type": "key", "key": "w", "pressed": True})
-            ignored = socket.receive_json()["data"]
-            assert ignored["keys"] == []
-            time.sleep(0.25)
-            held = client.get("/api/status").json()
-            assert held["active_control_source"] == "hold"
-            assert np.isclose(
-                held["eef_position"][1],
-                initial["eef_position"][1],
-                atol=0.005,
-            )
-
-            socket.send_json({"type": "keyboard_control", "enabled": True})
-            enabled = socket.receive_json()["data"]
-            assert enabled["keyboard_enabled"] is True
-            socket.send_json({"type": "key", "key": "w", "pressed": True})
-            socket.receive_json()
-            time.sleep(0.4)
-            socket.send_json({"type": "key", "key": "w", "pressed": False})
-            socket.receive_json()
-        moved = client.get("/api/status").json()
-        assert moved["active_control_source"] == "keyboard"
-        assert moved["eef_position"][1] < held["eef_position"][1] - 0.005

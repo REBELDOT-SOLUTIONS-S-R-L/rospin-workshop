@@ -31,8 +31,9 @@ def test_environment_contract_and_cameras() -> None:
         assert env.action_space.shape == (len(ACTION_NAMES),)
         assert env.metadata["render_fps"] == 25
         assert len(JOINT_NAMES) == 6
-        assert set(CAMERA_NAMES) == {"wrist", "perspective"}
+        assert set(CAMERA_NAMES) == {"wrist", "top", "perspective"}
         assert observation["observation.images.wrist"].shape == (72, 96, 3)
+        assert observation["observation.images.top"].shape == (72, 96, 3)
         assert observation["observation.images.perspective"].dtype == np.uint8
         assert info["eef_position"].shape == (3,)
         assert info["eef_orientation"].shape == (4,)

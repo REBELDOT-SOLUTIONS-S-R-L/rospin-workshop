@@ -18,15 +18,12 @@ from rospin_workshop.env import (
     SO101WorkshopEnv,
 )
 from rospin_workshop.recorder import LeRobotV3Recorder
-from rospin_workshop.remote import (
-    SO101RemoteReader,
-    remote_positions_to_joint_targets,
-)
 from rospin_workshop.tasks import TaskDefinition, TaskRegistry
 
 LOGGER = logging.getLogger(__name__)
 
 PERSPECTIVE_MAX_RENDER_WIDTH = 640
+DATASET_CAMERA_NAMES = ("wrist", "top")
 
 
 class TaskSessionConflictError(RuntimeError):
@@ -158,7 +155,6 @@ class WorkshopController:
         self,
         config: RuntimeConfig,
         *,
-        remote_reader: SO101RemoteReader | None = None,
         task_registry: TaskRegistry | None = None,
     ) -> None:
         if config.camera_hz <= 0:
@@ -177,16 +173,10 @@ class WorkshopController:
         self._jpeg_frames: dict[str, bytes] = {}
         self._keys: set[str] = set()
         self._gripper_command = 0.0
-        self._keyboard_enabled = True
         self._control_mode_changed = False
         self._active_control_source = "keyboard"
         self._trajectory_active = False
         self._trajectory_joint_targets: np.ndarray | None = None
-        self._remote = remote_reader or SO101RemoteReader(
-            port=self.config.remote_port,
-            calibration_dir=self.config.remote_calibration_root,
-            poll_hz=self.config.remote_hz,
-        )
         self._perspective_camera = PerspectiveCamera()
         self._recorder: LeRobotV3Recorder | None = None
         self._last_dataset_path: Path | None = None
@@ -216,11 +206,9 @@ class WorkshopController:
             "episode_timeout_seconds": None,
             "last_episode_outcome": None,
             "keys": [],
-            "keyboard_enabled": True,
             "active_control_source": "keyboard",
             "trajectory_active": False,
             "scripted_recording": False,
-            "remote": self._remote.status(),
             "eef_position": None,
             "eef_orientation": None,
             "joint_positions": None,
@@ -283,13 +271,10 @@ class WorkshopController:
         ]
 
     def start(self) -> None:
-        self._remote.start()
         self._thread.start()
         if not self._ready_event.wait(timeout=30):
-            self._remote.stop()
             raise RuntimeError("Simulation startup timed out")
         if self._error is not None:
-            self._remote.stop()
             raise RuntimeError(f"Simulation startup failed: {self._error}")
 
     def set_key(self, key: str, pressed: bool) -> None:
@@ -297,13 +282,6 @@ class WorkshopController:
         if key not in KEY_ACTIONS:
             return
         with self._lock:
-            if not self._keyboard_enabled:
-                self._keys.discard(key)
-                self._status_cache = {
-                    **self._status_cache,
-                    "keys": sorted(self._keys),
-                }
-                return
             if pressed:
                 self._keys.add(key)
                 if key == "[":
@@ -321,24 +299,6 @@ class WorkshopController:
         with self._lock:
             self._keys.clear()
             self._status_cache = {**self._status_cache, "keys": []}
-
-    def set_keyboard_enabled(self, enabled: bool) -> None:
-        with self._lock:
-            enabled = bool(enabled)
-            if enabled != self._keyboard_enabled:
-                self._control_mode_changed = True
-            self._keyboard_enabled = enabled
-            self._keys.clear()
-            self._gripper_command = 0.0
-            self._active_control_source = (
-                "keyboard" if self._keyboard_enabled else "hold"
-            )
-            self._status_cache = {
-                **self._status_cache,
-                "keys": [],
-                "keyboard_enabled": self._keyboard_enabled,
-                "active_control_source": self._active_control_source,
-            }
 
     def begin_trajectory_control(self) -> None:
         """Give a trajectory worker exclusive access to the simulated robot."""
@@ -392,8 +352,6 @@ class WorkshopController:
     def _current_action(self) -> np.ndarray:
         action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
         with self._lock:
-            if not self._keyboard_enabled:
-                return action
             keys = tuple(self._keys)
             gripper_command = self._gripper_command
         for key in keys:
@@ -405,7 +363,6 @@ class WorkshopController:
         if self.env is None:
             raise RuntimeError("Simulation environment is not ready")
         with self._lock:
-            keyboard_enabled = self._keyboard_enabled
             trajectory_active = self._trajectory_active
             trajectory_targets = (
                 self._trajectory_joint_targets.copy()
@@ -428,29 +385,17 @@ class WorkshopController:
                     trajectory_targets
                 )
             source = "trajectory"
-        elif keyboard_enabled:
+        else:
             action = self._current_action()
             self._observation, _, _, _, _ = self.env.step_dynamics(action)
             source = "keyboard"
-        else:
-            remote_positions = self._remote.latest_positions()
-            if remote_positions is None:
-                action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
-                self._observation, _, _, _, _ = self.env.step_dynamics(action)
-                source = "hold"
-            else:
-                targets = remote_positions_to_joint_targets(
-                    remote_positions,
-                    self.env.joint_ranges,
-                )
-                self._observation, _, _, _, _ = self.env.step_joint_targets(targets)
-                source = "remote"
 
         with self._lock:
             self._active_control_source = source
-        # The dataset action is the command a physical SO-101 consumes: six
-        # absolute joint targets. Keyboard, remote, and trajectory control all
-        # converge to this same representation before recording.
+        # The dataset action is the six absolute motor-angle targets sent to
+        # the simulated follower. Keyboard and trajectory control both
+        # converge to this representation before recording; the measured
+        # angles remain in observation.state.
         return self.env.data.ctrl.astype(np.float32, copy=True)
 
     @staticmethod
@@ -485,14 +430,11 @@ class WorkshopController:
                 now = time.monotonic()
                 render_requested = self._render_requested.is_set()
                 if render_requested:
-                    if not self._render_inflight:
-                        for camera in CAMERA_NAMES:
-                            self._submit_render(camera, action)
+                    if self._submit_renders(action):
                         self._render_requested.clear()
                         next_camera_tick = now + camera_period
                 elif now >= next_camera_tick:
-                    for camera in CAMERA_NAMES:
-                        self._submit_render(camera, action)
+                    self._submit_renders(action)
                     next_camera_tick += camera_period
                     if next_camera_tick <= now:
                         next_camera_tick = now + camera_period
@@ -587,8 +529,23 @@ class WorkshopController:
             1, round(self.config.image_height * scale)
         )
 
-    def _submit_render(self, camera: str, action: np.ndarray) -> bool:
-        if self.env is None or camera in self._render_inflight:
+    def _submit_renders(self, action: np.ndarray) -> bool:
+        """Submit a synchronized dataset pair and an independent viewer frame."""
+
+        dataset_submitted = self._submit_camera_group(DATASET_CAMERA_NAMES, action)
+        self._submit_camera_group(("perspective",), action)
+        return dataset_submitted
+
+    def _submit_camera_group(
+        self,
+        cameras: tuple[str, ...],
+        action: np.ndarray,
+    ) -> bool:
+        """Render a camera group from one state/action snapshot."""
+
+        if self.env is None or any(
+            camera in self._render_inflight for camera in cameras
+        ):
             return False
         recording_generation = (
             self._recording_generation
@@ -601,26 +558,27 @@ class WorkshopController:
         action_copy = np.asarray(action, dtype=np.float32).copy()
         self._pending_renders[sequence] = {
             "observation": {},
-            "recorded": False,
             "action": action_copy,
             "recording_generation": recording_generation,
             "epoch": self._render_epoch,
+            "remaining_cameras": set(cameras),
+            "record_dataset": set(cameras) == set(DATASET_CAMERA_NAMES),
         }
-        perspective_view = None
-        if camera == "perspective":
-            with self._lock:
-                perspective_view = self._perspective_camera.view()
-        self._render_requests[camera].put_nowait(
-            (
-                sequence,
-                snapshot,
-                action_copy,
-                recording_generation,
-                self._render_epoch,
-                perspective_view,
+        with self._lock:
+            perspective_view = self._perspective_camera.view()
+        for camera in cameras:
+            camera_view = perspective_view if camera == "perspective" else None
+            self._render_requests[camera].put_nowait(
+                (
+                    sequence,
+                    snapshot,
+                    action_copy,
+                    recording_generation,
+                    self._render_epoch,
+                    camera_view,
+                )
             )
-        )
-        self._render_inflight.add(camera)
+            self._render_inflight.add(camera)
         return True
 
     def _collect_render_results(self) -> None:
@@ -648,6 +606,7 @@ class WorkshopController:
         )
         if error is not None:
             raise RuntimeError("Camera rendering failed") from error
+        self._render_inflight.discard(camera)
         pending = self._pending_renders.get(sequence)
         if pending is None or observation is None or action is None:
             return
@@ -661,22 +620,20 @@ class WorkshopController:
             with self._lock:
                 self._jpeg_frames[camera] = jpeg
 
+        pending["remaining_cameras"].discard(camera)
+        if pending["remaining_cameras"]:
+            return
+        self._pending_renders.pop(sequence)
+        camera_observation = pending["observation"]
+        if epoch != self._render_epoch:
+            return
         if (
-            camera == "wrist"
-            and epoch == self._render_epoch
-            and not pending["recorded"]
+            pending["record_dataset"]
             and self._recorder is not None
             and self._recorder.recording
             and recording_generation == self._recording_generation
         ):
-            self._recorder.add_frame(pending["observation"], action)
-            pending["recorded"] = True
-
-        self._pending_renders.pop(sequence)
-        self._render_inflight.discard(camera)
-        camera_observation = pending["observation"]
-        if epoch != self._render_epoch:
-            return
+            self._recorder.add_frame(camera_observation, pending["action"])
         with self._lock:
             self._observation = camera_observation
             self._refresh_status_locked()
@@ -741,8 +698,7 @@ class WorkshopController:
             for render_thread in self._render_threads:
                 render_thread.start()
             startup_action = self.env.data.ctrl.astype(np.float32, copy=True)
-            for camera in CAMERA_NAMES:
-                self._submit_render(camera, startup_action)
+            self._submit_renders(startup_action)
             startup_deadline = time.monotonic() + 30
             while self._render_inflight:
                 timeout = startup_deadline - time.monotonic()
@@ -936,11 +892,9 @@ class WorkshopController:
             ),
             "last_episode_outcome": self._last_episode_outcome,
             "keys": sorted(self._keys),
-            "keyboard_enabled": self._keyboard_enabled,
             "active_control_source": self._active_control_source,
             "trajectory_active": self._trajectory_active,
             "scripted_recording": self._scripted_recording,
-            "remote": self._remote.status(),
             "eef_position": (
                 self.env.eef_position.round(4).tolist()
                 if self.env is not None
@@ -989,6 +943,5 @@ class WorkshopController:
 
     def close(self) -> None:
         self._stop_event.set()
-        self._remote.stop()
         if self._thread.is_alive():
             self._thread.join(timeout=30)
