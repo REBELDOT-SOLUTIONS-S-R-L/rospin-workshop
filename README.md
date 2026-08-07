@@ -1,7 +1,7 @@
-# RSOPIN SO-101 Workshop
+# ROSPIN SO-101 Workshop
 
-RSOPIN is a browser-based robotics workshop for the LeRobot SO-101 arm. It
-runs a headless MuJoCo simulation in Docker and provides:
+This is a browser-based robotics workshop for the LeRobot SO-101 arm. It runs
+a headless MuJoCo simulation in Docker and provides:
 
 - keyboard teleoperation with Cartesian and direct-joint controls;
 - a movable perspective view and a recorded wrist-camera view;
@@ -30,8 +30,8 @@ included in the Docker image.
 Clone the repository first:
 
 ```bash
-git clone https://github.com/REBELDOT-SOLUTIONS-S-R-L/RSOPIN-workshop.git
-cd RSOPIN-workshop
+git clone https://github.com/REBELDOT-SOLUTIONS-S-R-L/rospin-workshop.git
+cd rospin-workshop
 ```
 
 ### macOS
@@ -251,8 +251,8 @@ path.
 
 ## Dataset format
 
-RSOPIN writes a local LeRobot v3.0 dataset with `robot_type: so_follower` and
-25 FPS. A finalized dataset has this structure:
+The workshop application writes a local LeRobot v3.0 dataset with
+`robot_type: so_follower` and 25 FPS. A finalized dataset has this structure:
 
 ```text
 <dataset>/
