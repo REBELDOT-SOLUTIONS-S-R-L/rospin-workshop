@@ -36,6 +36,9 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         assert 'data-src="/camera/wrist.mjpg"' in page
         assert 'id="taskTitle"' in page
         assert 'id="successProgress"' in page
+        assert 'id="policyCheckpoint"' in page
+        assert 'id="policyStartButton"' in page
+        assert "ACT policy deployment" in page
         assert 'width="640" height="480"' in page
         views_start = page.index('<section class="views">')
         views_end = page.index("</section>", views_start)
@@ -65,6 +68,11 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         trajectory_status = client.get("/api/trajectory/status")
         assert trajectory_status.status_code == 200
         assert trajectory_status.json()["running"] is False
+        policy_status = client.get("/api/policy/status")
+        assert policy_status.status_code == 200
+        assert policy_status.json()["running"] is False
+        assert client.post("/api/policy/start", json={}).status_code == 422
+        assert client.post("/api/policy/stop", json={}).status_code == 200
         assert client.post("/api/trajectory/start", json={}).status_code == 422
         assert (
             client.post(

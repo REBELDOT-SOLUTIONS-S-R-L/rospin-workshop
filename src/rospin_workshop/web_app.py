@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from rospin_workshop.config import RuntimeConfig
 from rospin_workshop.controller import TaskSessionConflictError, WorkshopController
+from rospin_workshop.deployment import PolicyDeploymentManager
 from rospin_workshop.trajectory.runner import TrajectoryManager
 
 
@@ -19,6 +20,7 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     runtime = config or RuntimeConfig()
     controller = WorkshopController(runtime)
     trajectory_manager = TrajectoryManager(controller, runtime.trajectories_root)
+    policy_manager = PolicyDeploymentManager(controller, runtime.outputs_root)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -33,12 +35,14 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
                 await asyncio.to_thread(controller.select_task, only_task.id)
             yield
         finally:
+            policy_manager.close()
             trajectory_manager.close()
             controller.close()
 
     app = FastAPI(title="ROSpin SO-101 Workshop", lifespan=lifespan)
     app.state.controller = controller
     app.state.trajectory_manager = trajectory_manager
+    app.state.policy_manager = policy_manager
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
@@ -87,6 +91,11 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
         program = payload.get("program")
         if not isinstance(program, str) or not program.strip():
             raise HTTPException(status_code=422, detail="program is required")
+        if policy_manager.status()["running"]:
+            raise HTTPException(
+                status_code=409,
+                detail="A policy deployment is running",
+            )
         try:
             return await asyncio.to_thread(
                 trajectory_manager.start,
@@ -112,6 +121,37 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     @app.post("/api/trajectory/stop")
     async def stop_trajectory() -> dict[str, Any]:
         return trajectory_manager.stop()
+
+    @app.get("/api/policy/status")
+    async def policy_status() -> dict[str, Any]:
+        return policy_manager.status()
+
+    @app.post("/api/policy/start")
+    async def start_policy(payload: dict[str, Any]) -> dict[str, Any]:
+        checkpoint = payload.get("checkpoint")
+        if not isinstance(checkpoint, str) or not checkpoint.strip():
+            raise HTTPException(status_code=422, detail="checkpoint is required")
+        if trajectory_manager.status()["running"]:
+            raise HTTPException(
+                status_code=409,
+                detail="A trajectory program is running",
+            )
+        try:
+            return await asyncio.to_thread(
+                policy_manager.start,
+                checkpoint=checkpoint.strip(),
+                episodes=int(payload.get("episodes", 1)),
+                seed=int(payload.get("seed", 0)),
+                device=str(payload.get("device", "cpu")),
+            )
+        except (FileNotFoundError, ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/policy/stop")
+    async def stop_policy() -> dict[str, Any]:
+        return policy_manager.stop()
 
     @app.post("/api/session/task")
     async def select_task(payload: dict[str, Any]) -> dict[str, Any]:

@@ -6,6 +6,7 @@ from rospin_workshop.config import RuntimeConfig
 from rospin_workshop.recorder import (
     MOTOR_POSITION_NAMES,
     LeRobotV3Recorder,
+    real_to_simulation_motor_positions,
     simulation_to_real_motor_positions,
 )
 
@@ -53,3 +54,18 @@ def test_simulation_positions_match_real_so101_units() -> None:
         [0.0, -95.0, 90.0, 70.0, 0.0, 22.7273],
         atol=1e-3,
     )
+    np.testing.assert_allclose(
+        real_to_simulation_motor_positions(
+            simulation_to_real_motor_positions(workshop_home)
+        ),
+        workshop_home,
+        atol=1e-6,
+    )
+
+
+def test_real_gripper_positions_are_clipped_to_simulation_limits() -> None:
+    closed = real_to_simulation_motor_positions(np.array([0, 0, 0, 0, 0, -20]))
+    open_ = real_to_simulation_motor_positions(np.array([0, 0, 0, 0, 0, 120]))
+
+    assert np.isclose(closed[-1], np.deg2rad(-10.0))
+    assert np.isclose(open_[-1], np.deg2rad(100.0))

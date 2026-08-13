@@ -1,6 +1,6 @@
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("start", "stop", "logs", "check", "train", "preview", "generate")]
+    [ValidateSet("start", "stop", "logs", "check", "train", "deploy", "preview", "generate")]
     [string]$Command = "start",
 
     [Parameter(Position = 1)]
@@ -39,6 +39,13 @@ switch ($Command) {
         $device = if ($Gpu) { "cuda" } else { "cpu" }
         docker @compose run --rm --entrypoint rospin-train-act workshop `
             "/workspace/data/datasets/$Dataset" --device $device --steps $Steps
+    }
+    "deploy" {
+        if (-not $Dataset) { throw "Pass a checkpoint path relative to data/outputs." }
+        $device = if ($Gpu) { "cuda" } else { "cpu" }
+        docker @compose up -d --build --wait workshop
+        docker @compose exec -T workshop rospin-deploy $Dataset `
+            --device $device --episodes $Episodes --seed $Seed
     }
     "preview" {
         if (-not $Dataset) { throw "Pass a Python filename from trajectories/." }

@@ -177,6 +177,30 @@ def test_keyboard_step_returns_six_absolute_joint_targets(tmp_path) -> None:
         env.close()
 
 
+def test_policy_control_applies_absolute_joint_targets_exclusively(tmp_path) -> None:
+    controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
+    env = SO101WorkshopEnv(render_mode=None)
+    controller.env = env
+    try:
+        env.reset()
+        targets = env.data.ctrl.copy()
+        targets[0] += 0.08
+
+        controller.begin_policy_control()
+        controller.set_key("w", True)
+        controller.set_policy_joint_targets(targets)
+        recorded_action = controller._step_control()
+
+        assert controller._active_control_source == "policy"
+        assert controller._keys == set()
+        assert recorded_action[0] > env.joint_positions[0]
+        controller.end_policy_control()
+        controller._step_control()
+        assert controller._active_control_source == "keyboard"
+    finally:
+        env.close()
+
+
 def test_perspective_camera_orbit_pan_zoom_and_reset(tmp_path) -> None:
     camera = PerspectiveCamera()
     initial_position, initial_lookat = camera.view()

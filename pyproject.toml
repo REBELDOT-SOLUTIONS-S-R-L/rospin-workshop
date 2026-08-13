@@ -32,6 +32,7 @@ rospin-train-act = "rospin_workshop.train_act:main"
 rospin-check-dataset = "rospin_workshop.dataset_tools:main"
 rospin-self-check = "rospin_workshop.self_check:main"
 rospin-generate = "rospin_workshop.trajectory.cli:main"
+rospin-deploy = "rospin_workshop.deploy_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

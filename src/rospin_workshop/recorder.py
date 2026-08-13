@@ -44,6 +44,26 @@ def simulation_to_real_motor_positions(values: np.ndarray) -> np.ndarray:
     return converted.astype(np.float32)
 
 
+def real_to_simulation_motor_positions(values: np.ndarray) -> np.ndarray:
+    """Convert calibrated LeRobot SO-101 positions to MuJoCo joint angles."""
+
+    values = np.asarray(values, dtype=np.float64)
+    if values.shape != (len(JOINT_NAMES),):
+        raise ValueError(
+            f"Motor positions must contain {len(JOINT_NAMES)} values"
+        )
+    if not np.all(np.isfinite(values)):
+        raise ValueError("Motor positions must all be finite")
+    converted = np.deg2rad(values) + SIM_JOINT_OFFSETS_RADIANS
+    gripper_percent = np.clip(values[-1], 0.0, 100.0)
+    converted[-1] = SIM_GRIPPER_CLOSED_RAD + (
+        gripper_percent
+        / 100.0
+        * (SIM_GRIPPER_OPEN_RAD - SIM_GRIPPER_CLOSED_RAD)
+    )
+    return converted
+
+
 def _safe_name(value: str) -> str:
     value = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value.strip()).strip("._-")
     return value[:64] or "so101_session"

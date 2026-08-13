@@ -175,8 +175,8 @@ class WorkshopController:
         self._gripper_command = 0.0
         self._control_mode_changed = False
         self._active_control_source = "keyboard"
-        self._trajectory_active = False
-        self._trajectory_joint_targets: np.ndarray | None = None
+        self._joint_control_source: str | None = None
+        self._joint_control_targets: np.ndarray | None = None
         self._perspective_camera = PerspectiveCamera()
         self._recorder: LeRobotV3Recorder | None = None
         self._last_dataset_path: Path | None = None
@@ -186,6 +186,8 @@ class WorkshopController:
         self._message = "Waiting for task selection"
         self._error: str | None = None
         self._lock = threading.RLock()
+        self._observation_condition = threading.Condition(self._lock)
+        self._observation_sequence = 0
         self._status_cache: dict[str, Any] = {
             "message": "Waiting for task selection",
             "error": None,
@@ -208,6 +210,7 @@ class WorkshopController:
             "keys": [],
             "active_control_source": "keyboard",
             "trajectory_active": False,
+            "policy_active": False,
             "scripted_recording": False,
             "eef_position": None,
             "eef_orientation": None,
@@ -287,6 +290,8 @@ class WorkshopController:
         if key not in KEY_ACTIONS:
             return
         with self._lock:
+            if self._joint_control_source is not None:
+                return
             if pressed:
                 self._keys.add(key)
                 if key == "[":
@@ -305,40 +310,64 @@ class WorkshopController:
             self._keys.clear()
             self._status_cache = {**self._status_cache, "keys": []}
 
-    def begin_trajectory_control(self) -> None:
-        """Give a trajectory worker exclusive access to the simulated robot."""
-
+    def _begin_joint_control(self, source: str) -> None:
+        if source not in {"trajectory", "policy"}:
+            raise ValueError(f"Unsupported joint control source: {source}")
         with self._lock:
-            if self._trajectory_active:
-                raise RuntimeError("Trajectory control is already active")
-            self._trajectory_active = True
-            self._trajectory_joint_targets = None
+            if self._joint_control_source is not None:
+                raise RuntimeError(
+                    f"{self._joint_control_source.title()} control is already active"
+                )
+            self._joint_control_source = source
+            self._joint_control_targets = None
             self._control_mode_changed = True
             self._keys.clear()
             self._gripper_command = 0.0
 
-    def set_trajectory_joint_targets(self, targets: np.ndarray) -> None:
+    def _set_joint_control_targets(self, source: str, targets: np.ndarray) -> None:
         targets = np.asarray(targets, dtype=np.float64)
         if targets.shape != (len(JOINT_NAMES),):
-            raise ValueError(
-                f"Trajectory target must contain {len(JOINT_NAMES)} joints"
-            )
+            raise ValueError(f"Joint target must contain {len(JOINT_NAMES)} joints")
         if not np.all(np.isfinite(targets)):
-            raise ValueError("Trajectory joint targets must all be finite")
+            raise ValueError("Joint targets must all be finite")
         with self._lock:
-            if not self._trajectory_active:
-                raise RuntimeError("Trajectory control is not active")
-            self._trajectory_joint_targets = targets.copy()
+            if self._joint_control_source != source:
+                raise RuntimeError(f"{source.title()} control is not active")
+            self._joint_control_targets = targets.copy()
+
+    def _end_joint_control(self, source: str) -> None:
+        with self._lock:
+            if self._joint_control_source != source:
+                return
+            self._joint_control_source = None
+            self._joint_control_targets = None
+            self._control_mode_changed = True
+
+    def begin_trajectory_control(self) -> None:
+        """Give a trajectory worker exclusive access to the simulated robot."""
+
+        self._begin_joint_control("trajectory")
+
+    def set_trajectory_joint_targets(self, targets: np.ndarray) -> None:
+        self._set_joint_control_targets("trajectory", targets)
 
     def end_trajectory_control(self) -> None:
         """Release trajectory ownership and hold the current simulated pose."""
 
-        with self._lock:
-            if not self._trajectory_active:
-                return
-            self._trajectory_active = False
-            self._trajectory_joint_targets = None
-            self._control_mode_changed = True
+        self._end_joint_control("trajectory")
+
+    def begin_policy_control(self) -> None:
+        """Give an inference worker exclusive absolute-joint control."""
+
+        self._begin_joint_control("policy")
+
+    def set_policy_joint_targets(self, targets: np.ndarray) -> None:
+        self._set_joint_control_targets("policy", targets)
+
+    def end_policy_control(self) -> None:
+        """Release policy ownership and hold the current simulated pose."""
+
+        self._end_joint_control("policy")
 
     def control_perspective_camera(
         self,
@@ -368,10 +397,10 @@ class WorkshopController:
         if self.env is None:
             raise RuntimeError("Simulation environment is not ready")
         with self._lock:
-            trajectory_active = self._trajectory_active
-            trajectory_targets = (
-                self._trajectory_joint_targets.copy()
-                if self._trajectory_joint_targets is not None
+            joint_control_source = self._joint_control_source
+            joint_control_targets = (
+                self._joint_control_targets.copy()
+                if self._joint_control_targets is not None
                 else None
             )
             control_mode_changed = self._control_mode_changed
@@ -380,16 +409,16 @@ class WorkshopController:
         if control_mode_changed:
             self.env.hold_current_pose()
 
-        if trajectory_active:
-            if trajectory_targets is None:
+        if joint_control_source is not None:
+            if joint_control_targets is None:
                 self._observation, _, _, _, _ = self.env.step_dynamics(
                     np.zeros(len(ACTION_NAMES), dtype=np.float32)
                 )
             else:
                 self._observation, _, _, _, _ = self.env.step_joint_targets(
-                    trajectory_targets
+                    joint_control_targets
                 )
-            source = "trajectory"
+            source = joint_control_source
         else:
             action = self._current_action()
             self._observation, _, _, _, _ = self.env.step_dynamics(action)
@@ -649,6 +678,8 @@ class WorkshopController:
             self._recorder.add_frame(camera_observation, pending["action"])
         with self._lock:
             self._observation = camera_observation
+            self._observation_sequence += 1
+            self._observation_condition.notify_all()
             self._refresh_status_locked()
 
     def _process_commands(self) -> None:
@@ -673,6 +704,41 @@ class WorkshopController:
             if camera not in self._jpeg_frames:
                 raise RuntimeError("Camera is not ready")
             return self._jpeg_frames[camera]
+
+    def observation_sequence(self) -> int:
+        with self._lock:
+            return self._observation_sequence
+
+    def wait_for_policy_observation(
+        self,
+        *,
+        after_sequence: int,
+        timeout: float = 5.0,
+    ) -> tuple[int, dict[str, np.ndarray]]:
+        """Wait for a fresh synchronized wrist image and measured joint state."""
+
+        deadline = time.monotonic() + timeout
+        with self._observation_condition:
+            while True:
+                observation = self._observation
+                if (
+                    self._observation_sequence > after_sequence
+                    and observation is not None
+                    and "observation.state" in observation
+                    and "observation.images.wrist" in observation
+                ):
+                    return self._observation_sequence, {
+                        "observation.state": np.asarray(
+                            observation["observation.state"], dtype=np.float32
+                        ).copy(),
+                        "observation.images.wrist": np.asarray(
+                            observation["observation.images.wrist"], dtype=np.uint8
+                        ).copy(),
+                    }
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Timed out waiting for a fresh wrist observation")
+                self._observation_condition.wait(remaining)
 
     def command(self, command: str, payload: dict[str, Any]) -> Any:
         if not self._thread.is_alive():
@@ -732,8 +798,8 @@ class WorkshopController:
         with self._lock:
             self._keys.clear()
             self._gripper_command = 0.0
-            if self._trajectory_active:
-                self._trajectory_joint_targets = None
+            if self._joint_control_source is not None:
+                self._joint_control_targets = None
         self._observation, _ = self.env.reset(seed=seed)
         self._render_epoch += 1
         self._render_requested.set()
@@ -925,7 +991,8 @@ class WorkshopController:
             "last_episode_outcome": self._last_episode_outcome,
             "keys": sorted(self._keys),
             "active_control_source": self._active_control_source,
-            "trajectory_active": self._trajectory_active,
+            "trajectory_active": self._joint_control_source == "trajectory",
+            "policy_active": self._joint_control_source == "policy",
             "scripted_recording": self._scripted_recording,
             "eef_position": (
                 self.env.eef_position.round(4).tolist()
@@ -975,5 +1042,7 @@ class WorkshopController:
 
     def close(self) -> None:
         self._stop_event.set()
+        with self._observation_condition:
+            self._observation_condition.notify_all()
         if self._thread.is_alive():
             self._thread.join(timeout=30)

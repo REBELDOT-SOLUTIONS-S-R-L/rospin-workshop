@@ -159,11 +159,11 @@
     .bottom-panels .teleop { grid-column: 1 / -1; }
     .side-content { padding: 18px; }
     label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; margin: 13px 0 7px; }
-    input {
+    input, select {
       width: 100%; border: 1px solid #34455c; border-radius: 9px;
       color: var(--text); background: #0b111b; padding: 10px 11px; outline: none;
     }
-    input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #4da3ff22; }
+    input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px #4da3ff22; }
     .button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 16px; }
     button {
       border: 1px solid #3c4f68; border-radius: 9px; padding: 10px 8px;
@@ -305,6 +305,33 @@
 
       <section class="card side-content">
         <div class="status-line">
+          <h2 style="margin:0">ACT policy deployment</h2>
+          <span id="policyBadge" class="badge">idle</span>
+        </div>
+        <label for="policyCheckpoint">Checkpoint under data/outputs</label>
+        <input id="policyCheckpoint"
+               placeholder="act_run/checkpoints/010000/pretrained_model">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px">
+          <div><label for="policyEpisodes">Episodes</label><input id="policyEpisodes" type="number" min="1" value="1"></div>
+          <div><label for="policySeed">First seed</label><input id="policySeed" type="number" value="20000"></div>
+          <div><label for="policyDevice">Device</label><select id="policyDevice"><option value="cuda">CUDA</option><option value="cpu">CPU</option></select></div>
+        </div>
+        <div class="button-grid">
+          <button id="policyStartButton" class="primary">Start policy</button>
+          <button id="policyStopButton" class="danger">Stop policy</button>
+        </div>
+        <p id="policyMessage" class="message">Select a trained ACT checkpoint.</p>
+        <dl>
+          <dt>Progress</dt><dd id="policyProgress">0 / 0</dd>
+          <dt>Success / timeout</dt><dd id="policyOutcomes">0 / 0</dd>
+          <dt>Inference</dt><dd id="policyInference">—</dd>
+          <dt>Last result</dt><dd id="policyLastOutcome">—</dd>
+        </dl>
+        <div class="hint">Policy outputs are six absolute SO-101 joint targets. Deployment stops each rollout on task success or the configured episode timeout.</div>
+      </section>
+
+      <section class="card side-content">
+        <div class="status-line">
           <h2 style="margin:0">Session status</h2>
           <span id="recordingBadge" class="badge">idle</span>
         </div>
@@ -340,6 +367,7 @@
     const perspectiveViewport = document.querySelector("#perspectiveViewport");
     let socket;
     let status = {};
+    let policyStatus = {running: false};
     let cameraDrag;
     let pendingCameraMotion;
     let cameraMotionTimer;
@@ -511,14 +539,47 @@
         ? `az ${camera.azimuth_degrees.toFixed(1)}° · el ${camera.elevation_degrees.toFixed(1)}° · ${camera.distance.toFixed(2)} m`
         : "rear view";
       const taskReady = next.task_ready === true;
-      document.querySelector("#startButton").disabled = !taskReady || next.recording;
+      const policyRunning = policyStatus.running === true;
+      document.querySelector("#startButton").disabled = !taskReady || next.recording || policyRunning;
       document.querySelector("#stopButton").disabled = !next.recording;
       document.querySelector("#discardButton").disabled = !next.recording;
       document.querySelector("#finishButton").disabled = next.recording || !next.dataset_path || next.finalized;
-      document.querySelector("#resetButton").disabled = !taskReady || next.recording;
+      document.querySelector("#resetButton").disabled = !taskReady || next.recording || policyRunning;
       document.querySelectorAll("kbd[data-key]").forEach(key => {
         key.classList.toggle("active", next.keys?.includes(key.dataset.key));
       });
+    }
+
+    function updatePolicyStatus(next) {
+      policyStatus = next;
+      const badge = document.querySelector("#policyBadge");
+      badge.textContent = next.running ? "● running" : (next.phase || "idle");
+      badge.classList.toggle("recording", next.running === true);
+      const message = document.querySelector("#policyMessage");
+      message.textContent = next.error || (next.running
+        ? `Episode ${next.current_episode || "—"}, seed ${next.current_seed ?? "—"}, ${next.phase}`
+        : (next.checkpoint ? `Checkpoint: ${next.checkpoint}` : "Select a trained ACT checkpoint."));
+      message.classList.toggle("error", Boolean(next.error));
+      document.querySelector("#policyProgress").textContent = `${next.completed_episodes || 0} / ${next.requested_episodes || 0}`;
+      document.querySelector("#policyOutcomes").textContent = `${next.successful_episodes || 0} / ${next.timed_out_episodes || 0}`;
+      document.querySelector("#policyInference").textContent = next.average_inference_ms == null
+        ? "—"
+        : `${next.average_inference_ms.toFixed(1)} ms avg`;
+      document.querySelector("#policyLastOutcome").textContent = next.last_outcome || "—";
+      document.querySelector("#policyStartButton").disabled = next.running || status.recording || !status.task_ready;
+      document.querySelector("#policyStopButton").disabled = !next.running;
+      updateStatus(status);
+    }
+
+    async function policyCommand(path, payload = {}) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.detail || "Policy command failed");
+      updatePolicyStatus(body);
     }
 
     window.addEventListener("keydown", event => {
@@ -606,6 +667,26 @@
     document.querySelector("#discardButton").onclick = () => command("discard_recording");
     document.querySelector("#finishButton").onclick = () => command("finish_dataset");
     document.querySelector("#resetButton").onclick = () => command("reset");
+    document.querySelector("#policyStartButton").onclick = async () => {
+      try {
+        await policyCommand("/api/policy/start", {
+          checkpoint: document.querySelector("#policyCheckpoint").value,
+          episodes: Number(document.querySelector("#policyEpisodes").value),
+          seed: Number(document.querySelector("#policySeed").value),
+          device: document.querySelector("#policyDevice").value,
+        });
+      } catch (error) {
+        document.querySelector("#policyMessage").textContent = error.message;
+        document.querySelector("#policyMessage").classList.add("error");
+      }
+    };
+    document.querySelector("#policyStopButton").onclick = async () => {
+      try { await policyCommand("/api/policy/stop"); }
+      catch (error) {
+        document.querySelector("#policyMessage").textContent = error.message;
+        document.querySelector("#policyMessage").classList.add("error");
+      }
+    };
 
     setInterval(async () => {
       try {
@@ -613,6 +694,8 @@
         if (!response.ok) throw new Error("Status request failed");
         const next = await response.json();
         updateStatus(next);
+        const policyResponse = await fetch("/api/policy/status");
+        if (policyResponse.ok) updatePolicyStatus(await policyResponse.json());
         if (!next.task_ready) ensureTask();
       } catch (_) {}
     }, 500);

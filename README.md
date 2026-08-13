@@ -359,15 +359,22 @@ unrecoverable error.
 
 ## Train an ACT policy
 
-Validate the finalized dataset first. Then train ACT on macOS or Linux:
+Validate the finalized dataset first. Then train ACT for a selected number of
+steps on macOS or Linux:
 
 ```bash
 ./scripts/workshop.sh check <dataset-directory>
-./scripts/workshop.sh train <dataset-directory>
+./scripts/workshop.sh train <dataset-directory> 100000
 ```
 
-The shell wrapper uses CPU and 100,000 training steps. On Windows, the step
-count can be selected explicitly:
+The step count defaults to 100,000 when omitted. To use an NVIDIA GPU on Linux,
+install NVIDIA Container Toolkit and give Docker GPU access, then run:
+
+```bash
+ROSPIN_GPU=1 ./scripts/workshop.sh train <dataset-directory> 100000
+```
+
+On Windows, select the step count and GPU explicitly:
 
 ```powershell
 .\scripts\workshop.ps1 check <dataset-directory>
@@ -391,3 +398,39 @@ The Windows wrapper can use an NVIDIA GPU when Docker already has GPU access:
 CPU training works on all supported platforms but is substantially slower.
 Use consistent successful demonstrations, cover the intended object spawn
 range, and keep validation episodes separate when comparing policies.
+
+## Deploy an ACT policy in simulation
+
+A deployable checkpoint is the `pretrained_model` directory inside a training
+checkpoint. Pass its path relative to `data/outputs`, followed by the number of
+evaluation episodes and the first reset seed:
+
+```bash
+ROSPIN_GPU=1 ./scripts/workshop.sh deploy \
+  act_<dataset-directory>/checkpoints/010000/pretrained_model \
+  10 \
+  20000
+```
+
+The command starts or recreates the workshop server with the selected CPU or
+CUDA image, loads the ACT model and its saved normalization processors, and
+runs it in the live MuJoCo task. Open <http://localhost:8000> while it runs to
+watch the wrist and perspective cameras. Each rollout receives a fresh seed,
+stops on the configured task success condition or episode timeout, and reports
+the final success/timeout counts. Press Ctrl+C to request a clean stop.
+
+The policy receives `observation.images.wrist` and the six measured joint
+positions at 25 Hz. Simulation radians are converted to the same calibrated
+SO-101 units used in the dataset, and the policy's six absolute targets are
+converted back to simulation radians and rate-limited by the same controller
+used to record the demonstrations. Keyboard and trajectory control are disabled
+during a rollout. Deployment can also be started and stopped from the **ACT
+policy deployment** panel in the browser.
+
+On Windows:
+
+```powershell
+.\scripts\workshop.ps1 deploy `
+  act_<dataset-directory>/checkpoints/010000/pretrained_model `
+  -Gpu -Episodes 10 -Seed 20000
+```
