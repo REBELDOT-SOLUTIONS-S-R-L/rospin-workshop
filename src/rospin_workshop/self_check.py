@@ -152,12 +152,28 @@ def main() -> None:
                 raise RuntimeError("cube_in_bowl success predicate did not latch")
 
             recorder.stop_episode(save=True)
+            # A second episode exercises the crash-safe file rotation path:
+            # each saved episode must close the previous Parquet and video
+            # segments before recording continues.
+            env.reset(seed=8)
+            recorder.start_episode(
+                dataset_name="self_check", task="verify packaged runtime"
+            )
+            for _ in range(3):
+                action = np.zeros(len(ACTION_NAMES), dtype=np.float32)
+                observation, _, _, _, _ = env.step(action)
+                recorder.add_frame(observation, env.data.ctrl)
+            recorder.stop_episode(save=True)
             dataset_path = recorder.finalize()
             dataset = inspect_dataset(dataset_path)
-            if "observation.images.top" not in dataset["features"]:
-                raise RuntimeError("Dataset is missing the real-schema top camera")
+            if "observation.images.top" in dataset["features"]:
+                raise RuntimeError("Dataset unexpectedly contains the top camera")
+            if "observation.images.wrist" not in dataset["features"]:
+                raise RuntimeError("Dataset is missing the wrist camera")
             if dataset["fps"] != 25 or dataset["video_fps"] != 25:
                 raise RuntimeError("Dataset videos are not all 25 FPS")
+            if dataset["episodes"] != 2:
+                raise RuntimeError("Crash-safe episode rotation lost an episode")
             if tuple(dataset["features"]["action"]["shape"]) != (
                 len(JOINT_NAMES),
             ):
@@ -192,9 +208,6 @@ def main() -> None:
                     "fps": dataset["fps"],
                     "timestamp_step_seconds": dataset["timestamp_step_seconds"],
                     "video_codecs": {
-                        "observation.images.top": dataset["features"][
-                            "observation.images.top"
-                        ]["info"]["video.codec"],
                         "observation.images.wrist": dataset["features"][
                             "observation.images.wrist"
                         ]["info"]["video.codec"]

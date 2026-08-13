@@ -90,19 +90,6 @@ On Windows:
 
 Recorded datasets and training outputs remain under `data/` on the host.
 
-### When a rebuild is required
-
-The start scripts request a build, but Docker reuses cached layers when nothing
-changed. A full rebuild is not required for normal workshop work.
-
-| Change | Required action |
-|---|---|
-| A file under `trajectories/` | Nothing; programs are loaded for each run |
-| A YAML file under `tasks/` | Restart the application; do not rebuild |
-| Application source, dependencies, assets, or `Dockerfile` | Rebuild the image |
-
-To restart without requesting a build, run `docker compose restart workshop`.
-
 ## Choose a workshop task
 
 The task ID is selected through the browser URL:
@@ -124,47 +111,6 @@ The two empty rows are reserved for future workshop tasks.
 | 1 | `cube_in_bowl` | Pick up the green cube and place it in the bowl | [`tasks/cube_in_bowl.yaml`](tasks/cube_in_bowl.yaml) |
 | 2 |  |  |  |
 | 3 |  |  |  |
-
-### Keep the tasks equally difficult
-
-Do not create three pick-and-place variants with different shapes. Give each
-team a different manipulation skill, then normalize the difficulty with the
-same constraints:
-
-- one main movable object and one clear final state;
-- a similar number of phases, approximately five to seven;
-- comparable travel distance, grasp precision, and reachable workspace;
-- no hidden state or perception outside the two recorded cameras;
-- the same episode timeout; and
-- an automatic success condition that does not depend on a human judge.
-
-Before the workshop, run at least ten manual trials per task. Adjust object
-placement and tolerances until median completion time and success rate are
-similar. A task that regularly requires joint-limit poses, self-collision, or
-occluded camera views should be redesigned rather than made easier only by a
-longer timeout.
-
-### Define a task
-
-Task files live in `tasks/`. The filename must match the lowercase task `id`.
-A task defines:
-
-- its title, participant instruction, and dataset description;
-- object catalogue IDs and world poses;
-- optional X/Y spawn ranges for dynamic objects;
-- success conditions and the required success hold time; and
-- the episode timeout.
-
-Coordinates are in metres relative to the scene centre. X and Y lie on the
-tabletop; positive Z points upward. The table is centred at the scene origin
-and measures 0.75 m × 0.75 m. For the cube task, the reachable random spawn
-workspace is X `[-0.15, 0.03]` and Y `[0.07, 0.20]`.
-
-One YAML file is sufficient when every object and success predicate already
-exists in the application catalogue. A new mechanism or a new kind of success
-test must first be implemented in the application, after which task authors can
-reuse it from YAML. Use [`tasks/cube_in_bowl.yaml`](tasks/cube_in_bowl.yaml) as
-the reference configuration.
 
 ## Use the browser UI
 
@@ -224,7 +170,7 @@ Use the **Local recording** panel:
    writes the final metadata and Parquet files.
 
 For the cube task, satisfying all YAML success conditions for two seconds
-automatically saves the episode. Reaching the 20-second timeout automatically
+automatically saves the episode. Reaching the 60-second timeout automatically
 discards it. Always use **Finish dataset** before validation, copying, merging,
 or training.
 
@@ -263,7 +209,6 @@ The workshop application writes a local LeRobot v3.0 dataset with
 │   ├── stats.json
 │   └── tasks.parquet
 └── videos/
-    ├── observation.images.top/chunk-000/file-000.mp4
     └── observation.images.wrist/chunk-000/file-000.mp4
 ```
 
@@ -274,10 +219,9 @@ features are:
 |---|---|---|
 | `observation.state` | `float32 (6,)` | measured motor positions |
 | `action` | `float32 (6,)` | absolute commanded motor targets |
-| `observation.images.top` | video `(480, 640, 3)` | fixed top RGB camera |
 | `observation.images.wrist` | video `(480, 640, 3)` | wrist RGB camera |
 
-Both camera streams are 25 FPS AV1 video with `yuv420p` pixel format. LeRobot
+The wrist stream is 25 FPS AV1 video with `yuv420p` pixel format. LeRobot
 also adds timestamps plus frame, episode, task, and global row indices.
 
 State and action use this order:
@@ -304,7 +248,7 @@ conversion and feature order.
 Before combining simulated and real episodes, verify that both datasets have:
 
 - LeRobot codebase version `v3.0` and 25 FPS;
-- the same four feature keys, shapes, names, and camera resolution;
+- the same three feature keys, shapes, names, and camera resolution;
 - `robot_type: so_follower`;
 - calibrated degrees for the five arm joints and `[0, 100]` for the gripper;
 - absolute target actions rather than deltas; and
@@ -330,17 +274,19 @@ def run(ctx: EpisodeContext) -> None:
 
     ctx.open_gripper()
     ctx.move_to(cube + [0.012, 0.0, 0.08], name="approach_cube")
+    grasp_joints = ctx.current_joints
+    grasp_joints[4] += grasp_joints[0]
+    ctx.move_joints(grasp_joints, name="align_gripper")
     ctx.move_linear(
         cube + [0.012, 0.0, -0.004],
         speed=0.025,
-        allow_contact=True,
         name="descend_to_cube",
     )
     ctx.close_gripper(until_contact=True)
     ctx.move_relative(z=0.10, name="lift_cube")
     ctx.move_to(bowl + [0.0, 0.0, 0.13], name="move_above_bowl")
     ctx.move_linear(
-        bowl + [0.0, 0.0, 0.11],
+        bowl + [0.0, 0.0, 0.125],
         allow_contact=True,
         name="lower_into_bowl",
     )
@@ -358,6 +304,7 @@ The complete reference is
 | Call | Purpose |
 |---|---|
 | `ctx.object_position("name")` | read an object's position after the seeded reset |
+| `ctx.current_joints` | read the six measured MuJoCo joint positions in radians |
 | `ctx.move_to(position)` | use a tabletop-safe vertical/horizontal path |
 | `ctx.move_linear(position)` | follow a straight Cartesian segment |
 | `ctx.move_relative(x=..., y=..., z=...)` | move relative to the measured current pose |
@@ -404,8 +351,11 @@ On Windows:
 
 Before recording each seed, the batch runner executes an unrecorded preflight
 with that seed. Failed programs are discarded before video encoding. Successful
-recordings are saved only when the selected task's success conditions pass,
-and the dataset is finalized automatically at the end of the batch.
+recordings are saved only when the selected task's success conditions pass.
+Seed-specific planning or execution failures are discarded and the batch
+continues with the next seed. Any successful episodes are finalized
+automatically when the batch completes, is cancelled, or later encounters an
+unrecoverable error.
 
 ## Train an ACT policy
 

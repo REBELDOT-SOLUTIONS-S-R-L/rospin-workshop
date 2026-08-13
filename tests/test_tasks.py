@@ -24,7 +24,7 @@ def test_cube_task_loads_from_strict_yaml() -> None:
 
     assert task.title == "Put the green cube in the bowl"
     assert task.dataset_description == "Put the green cube into the black bowl"
-    assert task.timeout_seconds == 20
+    assert task.timeout_seconds == 60
     assert [item.catalog_id for item in task.objects] == [
         "cube_green_usd",
         "bowl_oala_usd",

@@ -23,10 +23,15 @@ def run(ctx: EpisodeContext) -> None:
         speed=0.055,
         name="approach_cube",
     )
+    # Shoulder pan changes the jaws' world yaw. Counter-rotate the wrist so
+    # cubes throughout the randomized workspace are approached with the same
+    # grasp orientation instead of being pushed sideways by a jaw.
+    grasp_joints = ctx.current_joints
+    grasp_joints[4] += grasp_joints[0]
+    ctx.move_joints(grasp_joints, speed=0.7, name="align_gripper")
     ctx.move_linear(
         cube + grasp_offset,
         speed=0.025,
-        allow_contact=True,
         name="descend_to_cube",
     )
     ctx.close_gripper(until_contact=True)
@@ -38,7 +43,7 @@ def run(ctx: EpisodeContext) -> None:
         name="transfer_above_bowl",
     )
     ctx.move_linear(
-        bowl + transfer_offset + [0.0, 0.0, 0.11],
+        bowl + transfer_offset + [0.0, 0.0, 0.125],
         speed=0.025,
         allow_contact=True,
         name="lower_into_bowl",

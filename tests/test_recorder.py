@@ -23,8 +23,7 @@ def test_lerobot_v3_feature_schema(tmp_path) -> None:
     features = recorder.features
     assert features["observation.state"]["shape"] == (6,)
     assert features["observation.state"]["names"] == list(MOTOR_POSITION_NAMES)
-    assert features["observation.images.top"]["dtype"] == "video"
-    assert features["observation.images.top"]["shape"] == (480, 640, 3)
+    assert "observation.images.top" not in features
     assert features["observation.images.wrist"]["dtype"] == "video"
     assert features["observation.images.wrist"]["shape"] == (480, 640, 3)
     assert "observation.images.perspective" not in features

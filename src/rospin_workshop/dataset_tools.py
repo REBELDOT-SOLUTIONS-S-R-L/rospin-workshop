@@ -32,7 +32,6 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
     dataset = LeRobotDataset(repo_id=repo_id, root=root, video_backend="pyav")
     required = {
         "observation.state",
-        "observation.images.top",
         "observation.images.wrist",
         "action",
     }
@@ -61,7 +60,7 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
         raise ValueError("Dataset has no saved frames or episodes")
     sample = dataset[0]
     video_fps_by_camera: dict[str, float] = {}
-    for camera_key in ("observation.images.top", "observation.images.wrist"):
+    for camera_key in ("observation.images.wrist",):
         expected_h, expected_w, _ = dataset.features[camera_key]["shape"]
         if tuple(sample[camera_key].shape) != (3, expected_h, expected_w):
             raise ValueError(

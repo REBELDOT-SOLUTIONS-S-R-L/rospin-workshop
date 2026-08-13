@@ -13,7 +13,6 @@ import numpy as np
 from rospin_workshop.config import RuntimeConfig
 from rospin_workshop.env import (
     ACTION_NAMES,
-    CAMERA_NAMES,
     JOINT_NAMES,
     SO101WorkshopEnv,
 )
@@ -23,7 +22,8 @@ from rospin_workshop.tasks import TaskDefinition, TaskRegistry
 LOGGER = logging.getLogger(__name__)
 
 PERSPECTIVE_MAX_RENDER_WIDTH = 640
-DATASET_CAMERA_NAMES = ("wrist", "top")
+DATASET_CAMERA_NAMES = ("wrist",)
+RENDER_CAMERA_NAMES = DATASET_CAMERA_NAMES + ("perspective",)
 
 
 class TaskSessionConflictError(RuntimeError):
@@ -236,7 +236,7 @@ class WorkshopController:
                     tuple[np.ndarray, np.ndarray] | None,
                 ]
             ],
-        ] = {camera: queue.Queue(maxsize=1) for camera in CAMERA_NAMES}
+        ] = {camera: queue.Queue(maxsize=1) for camera in RENDER_CAMERA_NAMES}
         self._render_results: queue.Queue[
             tuple[
                 int,
@@ -248,6 +248,11 @@ class WorkshopController:
                 BaseException | None,
             ]
         ] = queue.Queue()
+        # OSMesa is not safe under concurrent rendering in this workload. Keep
+        # independent camera contexts, but never execute native Mesa calls at
+        # the same time (the previous concurrent path eventually segfaulted in
+        # libOSMesa during long synthetic batches).
+        self._render_lock = threading.Lock()
         self._render_inflight: set[str] = set()
         self._render_sequence = 0
         self._pending_renders: dict[int, dict[str, Any]] = {}
@@ -267,7 +272,7 @@ class WorkshopController:
                 name=f"so101-render-{camera}",
                 daemon=True,
             )
-            for camera in CAMERA_NAMES
+            for camera in RENDER_CAMERA_NAMES
         ]
 
     def start(self) -> None:
@@ -474,13 +479,14 @@ class WorkshopController:
             if self._selected_task is None:
                 raise RuntimeError("Render worker started without a selected task")
             image_width, image_height = self._camera_render_size(camera)
-            render_env = SO101WorkshopEnv(
-                task=self._selected_task,
-                render_mode="rgb_array",
-                image_width=image_width,
-                image_height=image_height,
-                control_hz=self.config.control_hz,
-            )
+            with self._render_lock:
+                render_env = SO101WorkshopEnv(
+                    task=self._selected_task,
+                    render_mode="rgb_array",
+                    image_width=image_width,
+                    image_height=image_height,
+                    control_hz=self.config.control_hz,
+                )
             while not self._stop_event.is_set():
                 try:
                     (
@@ -493,11 +499,12 @@ class WorkshopController:
                     ) = self._render_requests[camera].get(timeout=0.1)
                 except queue.Empty:
                     continue
-                render_env.restore_simulation_snapshot(snapshot)
-                if camera_view is not None:
-                    position, lookat = camera_view
-                    render_env.set_camera_lookat(camera, position, lookat)
-                observation = render_env.capture_camera_observation(camera)
+                with self._render_lock:
+                    render_env.restore_simulation_snapshot(snapshot)
+                    if camera_view is not None:
+                        position, lookat = camera_view
+                        render_env.set_camera_lookat(camera, position, lookat)
+                    observation = render_env.capture_camera_observation(camera)
                 self._render_results.put(
                     (
                         sequence,
@@ -514,7 +521,8 @@ class WorkshopController:
             self._render_results.put((-1, camera, None, None, None, -1, exc))
         finally:
             if render_env is not None:
-                render_env.close()
+                with self._render_lock:
+                    render_env.close()
 
     def _camera_render_size(self, camera: str) -> tuple[int, int]:
         """Keep the recorded wrist feed native while bounding viewer render cost."""
@@ -530,10 +538,15 @@ class WorkshopController:
         )
 
     def _submit_renders(self, action: np.ndarray) -> bool:
-        """Submit a synchronized dataset pair and an independent viewer frame."""
+        """Submit a wrist dataset frame and an independent viewer frame."""
 
         dataset_submitted = self._submit_camera_group(DATASET_CAMERA_NAMES, action)
-        self._submit_camera_group(("perspective",), action)
+        # Give recording the full camera budget. The perspective image is
+        # viewer-only and may remain on its last frame during an episode; this
+        # keeps wrist capture at the declared 25 Hz while all OSMesa work stays
+        # serialized for native-library safety.
+        if self._recorder is None or not self._recorder.recording:
+            self._submit_camera_group(("perspective",), action)
         return dataset_submitted
 
     def _submit_camera_group(
@@ -834,6 +847,25 @@ class WorkshopController:
                 self._recorder = None
                 self._last_dataset_path = None
                 self._message = "Ready for a new dataset"
+            elif command == "resume_dataset":
+                if self._recorder is not None and self._recorder.recording:
+                    raise RuntimeError("Stop or discard the active recording first")
+                requested_path = Path(str(payload.get("dataset_path", "")))
+                if not requested_path.is_absolute():
+                    requested_path = self.config.datasets_root / requested_path
+                requested_path = requested_path.resolve()
+                datasets_root = self.config.datasets_root.resolve()
+                if requested_path.parent != datasets_root:
+                    raise ValueError("Resume dataset must be under the datasets root")
+                self._recorder = LeRobotV3Recorder(
+                    datasets_root=self.config.datasets_root,
+                    fps=self.config.camera_hz,
+                    image_width=self.config.image_width,
+                    image_height=self.config.image_height,
+                )
+                self._recorder.resume_dataset(requested_path)
+                self._last_dataset_path = requested_path
+                self._message = f"Resumed dataset: {requested_path}"
             else:
                 raise ValueError(f"Unknown command: {command}")
         except Exception as exc:

@@ -10,7 +10,11 @@ import numpy as np
 
 from rospin_workshop.controller import WorkshopController
 from rospin_workshop.env import HOME_JOINT_POSITIONS, JOINT_NAMES
-from rospin_workshop.trajectory.planner import MotionPlan, TrajectoryPlanner
+from rospin_workshop.trajectory.planner import (
+    MotionPlan,
+    MotionPlanningError,
+    TrajectoryPlanner,
+)
 from rospin_workshop.trajectory.program import (
     TrajectoryProgram,
     load_trajectory_program,
@@ -81,6 +85,15 @@ class EpisodeContext:
         if position.shape != (3,):
             raise TrajectoryExecutionError("End-effector position is unavailable")
         return position
+
+    @property
+    def current_joints(self) -> np.ndarray:
+        """Return the six measured MuJoCo joint positions in radians."""
+
+        positions = np.asarray(self._status()["joint_positions"], dtype=np.float64)
+        if positions.shape != (len(JOINT_NAMES),):
+            raise TrajectoryExecutionError("Robot joint state is unavailable")
+        return positions
 
     @property
     def task_success(self) -> bool:
@@ -225,6 +238,7 @@ class EpisodeContext:
             status = self._status()
             now = time.monotonic()
             position = float(status["joint_positions"][-1])
+            gripper_force = abs(float(status.get("gripper_force_nm") or 0.0))
             if abs(position - target_position) < 0.06:
                 return
             samples.append((now, position))
@@ -234,7 +248,8 @@ class EpisodeContext:
                 until_contact
                 and now - started >= 0.5
                 and len(samples) >= 4
-                and np.ptp([sample[1] for sample in samples]) < 0.002
+                and gripper_force >= 0.06
+                and np.ptp([sample[1] for sample in samples]) < 0.012
             ):
                 return
             self._sleep(0.05)
@@ -319,6 +334,7 @@ class TrajectoryManager:
             "phase": None,
             "dataset_path": None,
             "task_success": False,
+            "last_episode_error": None,
             "error": None,
         }
 
@@ -339,6 +355,7 @@ class TrajectoryManager:
         preview: bool,
         dataset_name: str,
         preflight: bool,
+        resume_dataset: str | None = None,
     ) -> dict[str, Any]:
         if not 1 <= episodes <= 10_000:
             raise ValueError("episodes must be between 1 and 10000")
@@ -361,6 +378,7 @@ class TrajectoryManager:
             "phase": "starting",
             "dataset_path": None,
             "task_success": False,
+            "last_episode_error": None,
             "error": None,
         }
         self._thread = threading.Thread(
@@ -372,6 +390,7 @@ class TrajectoryManager:
                 "preview": preview,
                 "dataset_name": dataset_name,
                 "preflight": preflight,
+                "resume_dataset": resume_dataset,
             },
             name="trajectory-runner",
             daemon=True,
@@ -416,6 +435,7 @@ class TrajectoryManager:
         preview: bool,
         dataset_name: str,
         preflight: bool,
+        resume_dataset: str | None,
     ) -> None:
         completed = 0
         saved = 0
@@ -432,43 +452,75 @@ class TrajectoryManager:
                 )
                 return
 
-            self.controller.command("new_dataset", {})
-            for index in range(episodes):
+            if resume_dataset:
+                self.controller.command(
+                    "resume_dataset", {"dataset_path": resume_dataset}
+                )
+                saved = int(self.controller.status().get("episodes") or 0)
+                if saved > episodes:
+                    raise TrajectoryExecutionError(
+                        f"Resume dataset already has {saved} episodes, above target "
+                        f"{episodes}"
+                    )
+                self._update(saved_episodes=saved)
+            else:
+                self.controller.command("new_dataset", {})
+            next_seed = seed
+            max_attempts = max(episodes * 10, episodes + 100)
+            while saved < episodes:
+                if completed >= max_attempts:
+                    raise TrajectoryExecutionError(
+                        f"Only saved {saved}/{episodes} episodes after "
+                        f"{completed} attempts"
+                    )
                 self._check_stopped()
-                episode_seed = seed + index
+                episode_seed = next_seed
+                next_seed += 1
                 self._update(
                     current_seed=episode_seed,
                     phase="preflight" if preflight else "recording_setup",
-                )
-                if preflight:
-                    self.controller.command("reset", {"seed": episode_seed})
-                    if not self._execute_once(program, episode_seed):
-                        completed += 1
-                        discarded += 1
-                        self._update(
-                            completed_episodes=completed,
-                            discarded_episodes=discarded,
-                            task_success=False,
-                        )
-                        continue
-
-                self.controller.command(
-                    "start_recording",
-                    {
-                        "dataset_name": dataset_name,
-                        "seed": episode_seed,
-                        "scripted": True,
-                    },
+                    last_episode_error=None,
                 )
                 try:
+                    if preflight:
+                        self.controller.command("reset", {"seed": episode_seed})
+                        if not self._execute_once(program, episode_seed):
+                            completed += 1
+                            discarded += 1
+                            self._update(
+                                completed_episodes=completed,
+                                discarded_episodes=discarded,
+                                task_success=False,
+                            )
+                            continue
+
+                    self.controller.command(
+                        "start_recording",
+                        {
+                            "dataset_name": dataset_name,
+                            "seed": episode_seed,
+                            "scripted": True,
+                        },
+                    )
                     self._update(phase="recording")
                     success = self._execute_once(program, episode_seed)
-                except Exception:
+                except TrajectoryCancelled:
+                    raise
+                except (MotionPlanningError, TrajectoryExecutionError) as exc:
                     if self.controller.status().get("recording"):
                         self.controller.command(
                             "discard_recording", {"outcome": "trajectory_error"}
                         )
-                    raise
+                    completed += 1
+                    discarded += 1
+                    self._update(
+                        completed_episodes=completed,
+                        discarded_episodes=discarded,
+                        task_success=False,
+                        phase="episode_failed",
+                        last_episode_error=str(exc),
+                    )
+                    continue
                 if success:
                     self.controller.command(
                         "stop_recording", {"outcome": "trajectory_success"}
@@ -503,6 +555,15 @@ class TrajectoryManager:
             self._update(error=str(exc), phase="failed")
         finally:
             self.controller.end_trajectory_control()
+            if self.controller.status().get("recording"):
+                self.controller.command(
+                    "discard_recording", {"outcome": "trajectory_error"}
+                )
+            if saved and not self.controller.status().get("finalized"):
+                try:
+                    self.controller.command("finish_dataset", {})
+                except Exception as exc:  # noqa: BLE001 - preserve prior results
+                    self._update(error=f"Could not finalize dataset: {exc}")
             self._update(
                 running=False,
                 completed_episodes=completed,

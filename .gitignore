@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+WORKSHOP_TIMETABLE_DRAFT.md
+
 data/datasets/*
 data/outputs/*
 !data/datasets/.gitkeep

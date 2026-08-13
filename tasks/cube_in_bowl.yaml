@@ -33,7 +33,7 @@ success:
       angular_rps: 0.5
 
 episode:
-  timeout_seconds: 20
+  timeout_seconds: 60
 
 dataset:
   description: Put the green cube into the black bowl

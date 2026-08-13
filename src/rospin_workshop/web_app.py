@@ -98,6 +98,11 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
                     payload.get("dataset_name", "synthetic_trajectory")
                 ),
                 preflight=bool(payload.get("preflight", True)),
+                resume_dataset=(
+                    str(payload["resume_dataset"])
+                    if payload.get("resume_dataset")
+                    else None
+                ),
             )
         except (FileNotFoundError, ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -59,6 +59,10 @@ def main() -> None:
         help="Record without first validating the same seeded episode",
     )
     parser.add_argument(
+        "--resume-dataset",
+        help="Resume a crash-safe dataset directory and target total episodes",
+    )
+    parser.add_argument(
         "--server",
         default=os.environ.get("ROSPIN_SERVER_URL", "http://127.0.0.1:8000"),
     )
@@ -75,6 +79,7 @@ def main() -> None:
                 "preview": args.preview,
                 "dataset_name": args.dataset_name,
                 "preflight": not args.no_preflight,
+                "resume_dataset": args.resume_dataset,
             },
         )
         previous_summary: tuple[Any, ...] | None = None

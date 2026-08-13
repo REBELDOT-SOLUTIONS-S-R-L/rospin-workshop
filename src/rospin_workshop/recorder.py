@@ -81,11 +81,6 @@ class LeRobotV3Recorder:
                 "shape": (len(JOINT_NAMES),),
                 "names": list(MOTOR_POSITION_NAMES),
             },
-            "observation.images.top": {
-                "dtype": "video",
-                "shape": image_shape,
-                "names": ["height", "width", "channels"],
-            },
             "observation.images.wrist": {
                 "dtype": "video",
                 "shape": image_shape,
@@ -130,7 +125,57 @@ class LeRobotV3Recorder:
             streaming_encoding=True,
             encoder_queue_maxsize=max(30, self.fps * 5),
             encoder_threads=2,
+            # Each saved episode is its own closed segment. Besides avoiding
+            # increasingly expensive MP4 concatenation, this keeps completed
+            # episodes readable if the simulation process is interrupted.
+            metadata_buffer_size=1,
+            # LeRobot treats zero as "use the default", so use a small
+            # positive threshold to force rotation after every episode.
+            data_files_size_in_mb=1e-6,
+            video_files_size_in_mb=1e-6,
         )
+
+    def resume_dataset(self, dataset_path: Path) -> None:
+        """Resume appending to a crash-safe dataset created by this recorder."""
+
+        from lerobot.configs.video import RGBEncoderConfig
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        if self.dataset is not None:
+            raise RuntimeError("A dataset session already exists")
+        dataset_path = Path(dataset_path).resolve()
+        info_path = dataset_path / "meta" / "info.json"
+        if not info_path.is_file():
+            raise FileNotFoundError(f"Dataset is missing metadata: {info_path}")
+
+        self.repo_id = f"local/{dataset_path.name}"
+        self.dataset_path = dataset_path
+        self.dataset = LeRobotDataset.resume(
+            repo_id=self.repo_id,
+            root=dataset_path,
+            rgb_encoder=RGBEncoderConfig(),
+            streaming_encoding=True,
+            encoder_queue_maxsize=max(30, self.fps * 5),
+            encoder_threads=2,
+        )
+        actual_observations = {
+            key
+            for key in self.dataset.features
+            if key.startswith("observation.")
+        }
+        if actual_observations != {
+            "observation.state",
+            "observation.images.wrist",
+        } or "action" not in self.dataset.features:
+            self.dataset.finalize()
+            self.dataset = None
+            raise ValueError("Dataset does not use the wrist-only workshop schema")
+
+    def _close_episode_files(self) -> None:
+        """Commit Parquet footers at every successful episode boundary."""
+
+        self.dataset.writer.close_writer()
+        self.dataset.meta._close_writer()
 
     def start_episode(self, *, dataset_name: str, task: str) -> None:
         if self.finalized:
@@ -155,7 +200,6 @@ class LeRobotV3Recorder:
         frame = {
             "task": self.task,
             "observation.state": state,
-            "observation.images.top": observation["observation.images.top"].copy(),
             "observation.images.wrist": observation["observation.images.wrist"].copy(),
             "action": action,
         }
@@ -171,6 +215,7 @@ class LeRobotV3Recorder:
             save = False
         if save:
             self.dataset.save_episode(parallel_encoding=False)
+            self._close_episode_files()
         elif self.dataset.has_pending_frames():
             self.dataset.clear_episode_buffer()
         self.frames_in_episode = 0

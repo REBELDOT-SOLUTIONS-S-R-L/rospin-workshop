@@ -102,19 +102,16 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
     assert details["features"]["observation.images.wrist"]["info"][
         "video.codec"
     ] == "av1"
-    assert details["features"]["observation.images.top"]["info"][
-        "video.codec"
-    ] == "av1"
     assert (
         details["features"]["observation.images.wrist"]["info"]["video.fps"] == 25
     )
+    assert "observation.images.top" not in details["features"]
     assert "observation.images.perspective" not in details["features"]
     assert details["decoded_frame_shapes"] == {
-        "observation.images.top": [3, 72, 96],
         "observation.images.wrist": [3, 72, 96],
     }
     assert details["features"]["action"]["shape"] == (6,)
-    assert details["features"]["action"]["names"][-1] == "gripper"
+    assert details["features"]["action"]["names"][-1] == "gripper.pos"
 
 
 def test_keyboard_mapping_and_gripper_command_latching(tmp_path) -> None:
@@ -214,7 +211,7 @@ def test_perspective_camera_orbit_pan_zoom_and_reset(tmp_path) -> None:
     assert not controller._render_requested.is_set()
 
 
-def test_all_cameras_render_at_configured_size(tmp_path) -> None:
+def test_active_cameras_render_at_configured_size(tmp_path) -> None:
     controller = WorkshopController(
         RuntimeConfig(
             data_root=tmp_path,
@@ -224,11 +221,10 @@ def test_all_cameras_render_at_configured_size(tmp_path) -> None:
     )
 
     assert controller._camera_render_size("wrist") == (640, 480)
-    assert controller._camera_render_size("top") == (640, 480)
     assert controller._camera_render_size("perspective") == (640, 480)
 
 
-def test_top_and_wrist_renders_share_one_snapshot(tmp_path) -> None:
+def test_only_wrist_and_perspective_renders_are_submitted(tmp_path) -> None:
     controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
     env = SO101WorkshopEnv(render_mode=None)
     controller.env = env
@@ -238,13 +234,13 @@ def test_top_and_wrist_renders_share_one_snapshot(tmp_path) -> None:
 
         assert controller._submit_renders(action) is True
         assert controller._submit_renders(action) is False
-        assert controller._render_inflight == {"perspective", "top", "wrist"}
+        assert controller._render_inflight == {"perspective", "wrist"}
         assert len(controller._pending_renders) == 2
         dataset_pending = next(
             pending
             for pending in controller._pending_renders.values()
             if pending["record_dataset"]
         )
-        assert dataset_pending["remaining_cameras"] == {"top", "wrist"}
+        assert dataset_pending["remaining_cameras"] == {"wrist"}
     finally:
         env.close()
