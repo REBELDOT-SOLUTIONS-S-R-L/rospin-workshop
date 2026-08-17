@@ -13,6 +13,7 @@ services:
       - type: bind
         source: ${ROSPIN_HOST_DATA_DIR:-./data}
         target: /workspace/data
+        consistency: consistent
         bind:
           create_host_path: false
       - ./trajectories:/workspace/trajectories:ro

@@ -32,6 +32,7 @@ def test_compose_persists_data_to_explicit_host_bind() -> None:
         "type": "bind",
         "source": "${ROSPIN_HOST_DATA_DIR:-./data}",
         "target": "/workspace/data",
+        "consistency": "consistent",
         "bind": {"create_host_path": False},
     }
     powershell = (ROOT / "scripts/workshop.ps1").read_text(encoding="utf-8")
