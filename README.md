@@ -5,7 +5,7 @@ a headless MuJoCo simulation in Docker and provides:
 
 - keyboard teleoperation with Cartesian and direct-joint controls;
 - a movable perspective view and a recorded wrist-camera view;
-- task scenes selected from small YAML files;
+- the cube-in-bowl scene loaded from its YAML definition;
 - local LeRobot v3 dataset recording;
 - participant-written Python trajectories for synthetic demonstrations; and
 - local ACT policy training.
@@ -43,7 +43,7 @@ supported. Then run:
 ./scripts/workshop.sh start
 ```
 
-Open <http://localhost:8000/?task=cube_in_bowl>.
+Open <http://localhost:8000>.
 
 ### Windows
 
@@ -54,7 +54,7 @@ start Docker Desktop. From PowerShell in the repository:
 .\scripts\workshop.ps1 start
 ```
 
-Open <http://localhost:8000/?task=cube_in_bowl>.
+Open <http://localhost:8000>.
 
 If script execution is disabled for the current PowerShell process, enable
 local scripts temporarily:
@@ -72,7 +72,7 @@ user can run `docker` commands. From the repository:
 ./scripts/workshop.sh start
 ```
 
-Open <http://localhost:8000/?task=cube_in_bowl>.
+Open <http://localhost:8000>.
 
 ### Stop the application
 
@@ -90,33 +90,18 @@ On Windows:
 
 Recorded datasets and training outputs remain under `data/` on the host.
 
-## Choose a workshop task
+## Cube-in-bowl task
 
-The task ID is selected through the browser URL:
-
-```text
-http://localhost:8000/?task=<task-id>
-```
-
-If the repository contains only one task, `http://localhost:8000` selects it
-automatically. A server session uses one task; restart the application before
-switching to a different task.
-
-### Workshop task examples
-
-The two empty rows are reserved for future workshop tasks.
-
-| Team | Task ID | Task | Definition |
-|---:|---|---|---|
-| 1 | `cube_in_bowl` | Pick up the green cube and place it in the bowl | [`tasks/cube_in_bowl.yaml`](tasks/cube_in_bowl.yaml) |
-| 2 |  |  |  |
-| 3 |  |  |  |
+The workshop always loads `cube_in_bowl` when the server starts. The task asks
+the robot to pick up the green cube and place it in the black bowl. Its scene,
+random cube spawn range, success conditions, and 60-second timeout are defined
+in [`tasks/cube_in_bowl.yaml`](tasks/cube_in_bowl.yaml).
 
 ## Use the browser UI
 
 The header shows whether the page is connected. Wait for **Connected** and for
-both camera feeds before starting an episode. The page reconnects and reclaims
-its selected task automatically after an application restart.
+both camera feeds before starting an episode. The page reconnects to the
+cube-in-bowl task automatically after an application restart.
 
 The UI has four working areas:
 
@@ -130,8 +115,9 @@ The UI has four working areas:
    finalizes episodes; displays the timer, frame count, task outcome, end
    effector pose, and dataset path.
 
-**Reset simulation** restores the robot home pose and respawns randomized task
-objects. It is disabled while an episode is being recorded.
+**Reset simulation** restores the robot home pose and respawns the cube at a
+randomized workspace position. It is disabled while an episode is being
+recorded.
 
 ## Teleoperation
 
@@ -160,8 +146,8 @@ different sizes without a fixed position limit.
 
 Use the **Local recording** panel:
 
-1. Enter a dataset name. The task description comes from the selected task and
-   cannot be edited in the UI.
+1. Enter a dataset name. The cube-in-bowl description is filled automatically
+   and cannot be edited in the UI.
 2. Select **Start episode**.
 3. Complete the task with the keyboard.
 4. Select **Save episode** to keep the take, or **Discard** to reject it.
@@ -252,7 +238,7 @@ Before combining simulated and real episodes, verify that both datasets have:
 - `robot_type: so_follower`;
 - calibrated degrees for the five arm joints and `[0, 100]` for the gripper;
 - absolute target actions rather than deltas; and
-- compatible task descriptions and camera semantics.
+- the same cube-in-bowl task description and camera semantics.
 
 The validation command checks the recorded schema and decodes the video. The
 training wrapper accepts one finalized dataset root, so any real/sim merge must
@@ -262,9 +248,9 @@ produce one valid LeRobot v3 root before training.
 
 Participants write ordinary Python in `trajectories/`. Start by copying
 [`trajectories/template.py`](trajectories/template.py). The copied template
-already imports the participant API; bind its decorator to the matching task ID
-and replace the example function body. Each file must define exactly one
-decorated trajectory function.
+already imports the participant API; keep its `cube_in_bowl` decorator and
+replace the example function body. Each file must define exactly one decorated
+trajectory function.
 
 ```python
 @trajectory(task="cube_in_bowl")
@@ -351,7 +337,7 @@ On Windows:
 
 Before recording each seed, the batch runner executes an unrecorded preflight
 with that seed. Failed programs are discarded before video encoding. Successful
-recordings are saved only when the selected task's success conditions pass.
+recordings are saved only when the cube-in-bowl success conditions pass.
 Seed-specific planning or execution failures are discarded and the batch
 continues with the next seed. Any successful episodes are finalized
 automatically when the batch completes, is cancelled, or later encounters an

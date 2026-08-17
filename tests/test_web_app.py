@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -8,11 +9,22 @@ from fastapi.testclient import TestClient
 from rospin_workshop.config import RuntimeConfig
 from rospin_workshop.web_app import create_app
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
+    tasks_root = tmp_path / "task_definitions"
+    tasks_root.mkdir()
+    cube_task = (ROOT / "tasks/cube_in_bowl.yaml").read_text(encoding="utf-8")
+    (tasks_root / "cube_in_bowl.yaml").write_text(cube_task, encoding="utf-8")
+    (tasks_root / "unused_task.yaml").write_text(
+        cube_task.replace("id: cube_in_bowl", "id: unused_task"),
+        encoding="utf-8",
+    )
     app = create_app(
         RuntimeConfig(
             data_root=tmp_path,
+            tasks_root=tasks_root,
             control_hz=20,
             camera_hz=5,
             image_width=96,
@@ -56,15 +68,18 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
         assert "Initializing simulation" in page
         assert "Waiting for simulation" in page
         assert "retryDelay = Math.min(3000, retryDelay * 2)" in page
-        assert "if (!next.task_ready) ensureTask()" in page
+        assert 'next.task_id !== "cube_in_bowl"' in page
+        assert "The cube-in-bowl task is loaded automatically." in page
+        assert "URLSearchParams" not in page
+        assert 'fetch("/api/tasks")' not in page
         assert 'cameraDrag.action === "orbit" ? -1 : 1' in page
         assert "direction * dx, direction * dy" in page
 
         ready = client.get("/api/status").json()
         assert ready["task_ready"] is True
         assert ready["task_id"] == "cube_in_bowl"
-        tasks = client.get("/api/tasks").json()
-        assert [task["id"] for task in tasks] == ["cube_in_bowl"]
+        assert client.get("/api/tasks").status_code == 404
+        assert client.post("/api/session/task", json={}).status_code == 404
         trajectory_status = client.get("/api/trajectory/status")
         assert trajectory_status.status_code == 200
         assert trajectory_status.json()["running"] is False
@@ -81,17 +96,7 @@ def test_browser_websocket_keys_move_and_rotate_eef(tmp_path) -> None:
             ).status_code
             == 422
         )
-        selected = client.post(
-            "/api/session/task", json={"task_id": "cube_in_bowl"}
-        )
-        assert selected.status_code == 200
-        assert client.post(
-            "/api/session/task", json={"task_id": "cube_in_bowl"}
-        ).status_code == 200
-        assert client.post(
-            "/api/session/task", json={"task_id": "missing_task"}
-        ).status_code == 404
-        initial = selected.json()
+        initial = ready
         assert initial["error"] is None
         assert initial["task_ready"] is True
         assert initial["task_id"] == "cube_in_bowl"

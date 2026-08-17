@@ -11,9 +11,11 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from rospin_workshop.config import RuntimeConfig
-from rospin_workshop.controller import TaskSessionConflictError, WorkshopController
+from rospin_workshop.controller import WorkshopController
 from rospin_workshop.deployment import PolicyDeploymentManager
 from rospin_workshop.trajectory.runner import TrajectoryManager
+
+WORKSHOP_TASK_ID = "cube_in_bowl"
 
 
 def create_app(config: RuntimeConfig | None = None) -> FastAPI:
@@ -26,13 +28,10 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         controller.start()
         try:
-            # A single-task workshop has no selection ambiguity. Initialize its
-            # MuJoCo environments and camera contexts before Uvicorn reports
-            # application startup complete, so that log line means the whole
-            # workshop—not only the HTTP socket—is ready.
-            only_task = controller.task_registry.only()
-            if only_task is not None:
-                await asyncio.to_thread(controller.select_task, only_task.id)
+            # This workshop always runs cube-in-bowl. Initialize MuJoCo and the
+            # camera contexts before Uvicorn reports application startup
+            # complete, so the web app can never open without its task loaded.
+            await asyncio.to_thread(controller.select_task, WORKSHOP_TASK_ID)
             yield
         finally:
             policy_manager.close()
@@ -77,10 +76,6 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
         return controller.status()
-
-    @app.get("/api/tasks")
-    async def tasks() -> list[dict[str, Any]]:
-        return controller.tasks()
 
     @app.get("/api/trajectory/status")
     async def trajectory_status() -> dict[str, Any]:
@@ -152,19 +147,6 @@ def create_app(config: RuntimeConfig | None = None) -> FastAPI:
     @app.post("/api/policy/stop")
     async def stop_policy() -> dict[str, Any]:
         return policy_manager.stop()
-
-    @app.post("/api/session/task")
-    async def select_task(payload: dict[str, Any]) -> dict[str, Any]:
-        task_id = payload.get("task_id")
-        if not isinstance(task_id, str) or not task_id.strip():
-            raise HTTPException(status_code=422, detail="task_id is required")
-        try:
-            await asyncio.to_thread(controller.select_task, task_id.strip())
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except TaskSessionConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return controller.status()
 
     @app.websocket("/ws")
     async def control_socket(websocket: WebSocket) -> None:
