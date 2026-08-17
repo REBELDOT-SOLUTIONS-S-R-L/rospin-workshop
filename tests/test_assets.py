@@ -19,7 +19,7 @@ URDF_PATH = ROBOT_DIR / "so101_new_calib.urdf"
 MJCF_PATH = ROOT / "src/rospin_workshop/models/so101_workshop.xml"
 
 
-def test_compose_persists_data_to_explicit_host_bind() -> None:
+def test_compose_persists_data_to_bind_backed_named_volume() -> None:
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
     volumes = compose["services"]["workshop"]["volumes"]
     data_mount = next(
@@ -29,16 +29,25 @@ def test_compose_persists_data_to_explicit_host_bind() -> None:
     )
 
     assert data_mount == {
-        "type": "bind",
-        "source": "${ROSPIN_HOST_DATA_DIR:-./data}",
+        "type": "volume",
+        "source": "workshop-data",
         "target": "/workspace/data",
-        "consistency": "consistent",
-        "bind": {"create_host_path": False},
+    }
+    assert compose["volumes"]["workshop-data"] == {
+        "name": "${ROSPIN_DATA_VOLUME_NAME:-rospin-workshop-data}",
+        "driver": "local",
+        "driver_opts": {
+            "type": "none",
+            "o": "bind",
+            "device": "${ROSPIN_HOST_DATA_DIR:-./data}",
+        },
     }
     powershell = (ROOT / "scripts/workshop.ps1").read_text(encoding="utf-8")
     shell = (ROOT / "scripts/workshop.sh").read_text(encoding="utf-8")
     assert '$env:ROSPIN_HOST_DATA_DIR = $hostDataRoot' in powershell
+    assert '$env:ROSPIN_DATA_VOLUME_NAME = "rospin-workshop-data"' in powershell
     assert "export ROSPIN_HOST_DATA_DIR" in shell
+    assert "export ROSPIN_DATA_VOLUME_NAME" in shell
 
 
 def test_hugging_face_so101_assets_are_vendored() -> None:

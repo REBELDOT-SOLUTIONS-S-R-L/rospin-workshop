@@ -7,6 +7,8 @@ cd "$repo_root"
 mkdir -p "$repo_root/data"
 ROSPIN_HOST_DATA_DIR=${ROSPIN_HOST_DATA_DIR:-"$repo_root/data"}
 export ROSPIN_HOST_DATA_DIR
+ROSPIN_DATA_VOLUME_NAME=${ROSPIN_DATA_VOLUME_NAME:-rospin-workshop-data}
+export ROSPIN_DATA_VOLUME_NAME
 
 command_name="${1:-start}"
 dataset_name="${2:-}"

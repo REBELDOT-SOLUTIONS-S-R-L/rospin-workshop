@@ -17,6 +17,7 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $hostDataRoot = Join-Path $repoRoot "data"
 New-Item -ItemType Directory -Force -Path $hostDataRoot | Out-Null
 $env:ROSPIN_HOST_DATA_DIR = $hostDataRoot
+$env:ROSPIN_DATA_VOLUME_NAME = "rospin-workshop-data"
 
 $compose = @(
     "compose",

@@ -89,11 +89,11 @@ On Windows:
 ```
 
 Recorded datasets and training outputs remain under `data/` on the host.
-The workshop scripts pass this directory to Docker as an absolute host path;
-startup fails instead of saving into an unintended container directory if the
-bind mount cannot be created. The mount uses consistent file sharing so saved
-episodes are written through to the host instead of remaining in a Docker
-Desktop synchronized-file-share cache.
+The workshop scripts pass this directory to Docker as an absolute host path.
+At startup, Compose creates the named `rospin-workshop-data` volume as a
+bind-backed volume whose storage device is that host directory. It therefore
+appears in Docker Desktop's Volumes view while keeping datasets directly under
+the repository's `data/` directory.
 
 ## Cube-in-bowl task
 
