@@ -257,39 +257,6 @@ already imports the participant API; keep its `cube_in_bowl` decorator and
 replace the example function body. Each file must define exactly one decorated
 trajectory function.
 
-```python
-@trajectory(task="cube_in_bowl")
-def run(ctx: EpisodeContext) -> None:
-    cube = ctx.object_position("cube")
-    bowl = ctx.object_position("bowl")
-
-    ctx.open_gripper()
-    ctx.move_to(cube + [0.012, 0.0, 0.08], name="approach_cube")
-    grasp_joints = ctx.current_joints
-    grasp_joints[4] += grasp_joints[0]
-    ctx.move_joints(grasp_joints, name="align_gripper")
-    ctx.move_linear(
-        cube + [0.012, 0.0, -0.004],
-        speed=0.025,
-        name="descend_to_cube",
-    )
-    ctx.close_gripper(until_contact=True)
-    ctx.move_relative(z=0.10, name="lift_cube")
-    ctx.move_to(bowl + [0.0, 0.0, 0.13], name="move_above_bowl")
-    ctx.move_linear(
-        bowl + [0.0, 0.0, 0.125],
-        allow_contact=True,
-        name="lower_into_bowl",
-    )
-    ctx.open_gripper()
-    ctx.wait_until_settled("cube")
-    ctx.move_relative(z=0.10, name="retreat")
-    ctx.move_home(preserve_gripper=True)
-```
-
-The complete reference is
-[`trajectories/cube_in_bowl.py`](trajectories/cube_in_bowl.py).
-
 ### Participant API
 
 | Call | Purpose |
@@ -319,25 +286,25 @@ Keep the application running. In a second terminal, preview one unrecorded
 episode:
 
 ```bash
-./scripts/workshop.sh preview cube_in_bowl.py 1 13
+./scripts/workshop.sh preview participant_trajectory.py 1 13
 ```
 
 On Windows:
 
 ```powershell
-.\scripts\workshop.ps1 preview cube_in_bowl.py -Seed 13
+.\scripts\workshop.ps1 preview participant_trajectory.py -Seed 13
 ```
 
 Generate 100 recorded episodes using seeds 1000 through 1099:
 
 ```bash
-./scripts/workshop.sh generate cube_in_bowl.py 100 1000
+./scripts/workshop.sh generate participant_trajectory.py 100 1000
 ```
 
 On Windows:
 
 ```powershell
-.\scripts\workshop.ps1 generate cube_in_bowl.py -Episodes 100 -Seed 1000
+.\scripts\workshop.ps1 generate participant_trajectory.py -Episodes 100 -Seed 1000
 ```
 
 Before recording each seed, the batch runner executes an unrecorded preflight
