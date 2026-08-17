@@ -7,6 +7,7 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+import yaml
 
 from rospin_workshop.collision import compose_robot_collisions
 from rospin_workshop.env import JOINT_NAMES
@@ -16,6 +17,27 @@ ROBOT_DIR = ROOT / "assets/robots/so101"
 OBJECT_DIR = ROOT / "assets/objects"
 URDF_PATH = ROBOT_DIR / "so101_new_calib.urdf"
 MJCF_PATH = ROOT / "src/rospin_workshop/models/so101_workshop.xml"
+
+
+def test_compose_persists_data_to_explicit_host_bind() -> None:
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    volumes = compose["services"]["workshop"]["volumes"]
+    data_mount = next(
+        volume
+        for volume in volumes
+        if isinstance(volume, dict) and volume.get("target") == "/workspace/data"
+    )
+
+    assert data_mount == {
+        "type": "bind",
+        "source": "${ROSPIN_HOST_DATA_DIR:-./data}",
+        "target": "/workspace/data",
+        "bind": {"create_host_path": False},
+    }
+    powershell = (ROOT / "scripts/workshop.ps1").read_text(encoding="utf-8")
+    shell = (ROOT / "scripts/workshop.sh").read_text(encoding="utf-8")
+    assert '$env:ROSPIN_HOST_DATA_DIR = $hostDataRoot' in powershell
+    assert "export ROSPIN_HOST_DATA_DIR" in shell
 
 
 def test_hugging_face_so101_assets_are_vendored() -> None:

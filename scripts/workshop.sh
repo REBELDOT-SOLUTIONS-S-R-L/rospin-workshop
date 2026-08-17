@@ -1,6 +1,13 @@
 #!/usr/bin/env sh
 set -eu
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(dirname "$script_dir")
+cd "$repo_root"
+mkdir -p "$repo_root/data"
+ROSPIN_HOST_DATA_DIR=${ROSPIN_HOST_DATA_DIR:-"$repo_root/data"}
+export ROSPIN_HOST_DATA_DIR
+
 command_name="${1:-start}"
 dataset_name="${2:-}"
 numeric_argument="${3:-}"

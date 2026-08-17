@@ -13,9 +13,18 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$compose = @("compose")
+$repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$hostDataRoot = Join-Path $repoRoot "data"
+New-Item -ItemType Directory -Force -Path $hostDataRoot | Out-Null
+$env:ROSPIN_HOST_DATA_DIR = $hostDataRoot
+
+$compose = @(
+    "compose",
+    "--project-directory", $repoRoot,
+    "-f", (Join-Path $repoRoot "compose.yaml")
+)
 if ($Gpu) {
-    $compose += @("-f", "compose.yaml", "-f", "compose.gpu.yaml")
+    $compose += @("-f", (Join-Path $repoRoot "compose.gpu.yaml"))
 }
 
 switch ($Command) {

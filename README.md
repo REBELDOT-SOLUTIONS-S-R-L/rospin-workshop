@@ -89,6 +89,9 @@ On Windows:
 ```
 
 Recorded datasets and training outputs remain under `data/` on the host.
+The workshop scripts pass this directory to Docker as an absolute host path;
+startup fails instead of saving into an unintended container directory if the
+bind mount cannot be created.
 
 ## Cube-in-bowl task
 
