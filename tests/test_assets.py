@@ -19,7 +19,7 @@ URDF_PATH = ROBOT_DIR / "so101_new_calib.urdf"
 MJCF_PATH = ROOT / "src/rospin_workshop/models/so101_workshop.xml"
 
 
-def test_compose_persists_data_to_bind_backed_named_volume() -> None:
+def test_compose_persists_data_to_verified_direct_host_bind() -> None:
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
     volumes = compose["services"]["workshop"]["volumes"]
     data_mount = next(
@@ -29,25 +29,22 @@ def test_compose_persists_data_to_bind_backed_named_volume() -> None:
     )
 
     assert data_mount == {
-        "type": "volume",
-        "source": "workshop-data",
+        "type": "bind",
+        "source": "${ROSPIN_HOST_DATA_DIR:-./data}",
         "target": "/workspace/data",
+        "bind": {"create_host_path": False},
     }
-    assert compose["volumes"]["workshop-data"] == {
-        "name": "${ROSPIN_DATA_VOLUME_NAME:-rospin-workshop-data}",
-        "driver": "local",
-        "driver_opts": {
-            "type": "none",
-            "o": "bind",
-            "device": "${ROSPIN_HOST_DATA_DIR:-./data}",
-        },
-    }
+    assert "volumes" not in compose
     powershell = (ROOT / "scripts/workshop.ps1").read_text(encoding="utf-8")
     shell = (ROOT / "scripts/workshop.sh").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert '$env:ROSPIN_HOST_DATA_DIR = $hostDataRoot' in powershell
-    assert '$env:ROSPIN_DATA_VOLUME_NAME = "rospin-workshop-data"' in powershell
     assert "export ROSPIN_HOST_DATA_DIR" in shell
-    assert "export ROSPIN_DATA_VOLUME_NAME" in shell
+    assert ".rospin-mount-probe-" in powershell
+    assert ".rospin-mount-probe-" in shell
+    assert "--force-recreate" in powershell
+    assert "--force-recreate" in shell
+    assert 'VOLUME ["/workspace/data"]' not in dockerfile
 
 
 def test_hugging_face_so101_assets_are_vendored() -> None:

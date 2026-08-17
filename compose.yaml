@@ -10,9 +10,11 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - type: volume
-        source: workshop-data
+      - type: bind
+        source: ${ROSPIN_HOST_DATA_DIR:-./data}
         target: /workspace/data
+        bind:
+          create_host_path: false
       - ./trajectories:/workspace/trajectories:ro
     environment:
       MUJOCO_GL: osmesa
@@ -23,12 +25,3 @@ services:
       ROSPIN_CAMERA_HZ: "25"
       ROSPIN_IMAGE_WIDTH: "640"
       ROSPIN_IMAGE_HEIGHT: "480"
-
-volumes:
-  workshop-data:
-    name: ${ROSPIN_DATA_VOLUME_NAME:-rospin-workshop-data}
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${ROSPIN_HOST_DATA_DIR:-./data}

@@ -45,7 +45,6 @@ RUN python -m pip install .
 RUN echo "target architecture: ${TARGETARCH}" \
     && MUJOCO_GL=osmesa rospin-self-check
 
-VOLUME ["/workspace/data"]
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=4 \

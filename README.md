@@ -89,11 +89,11 @@ On Windows:
 ```
 
 Recorded datasets and training outputs remain under `data/` on the host.
-The workshop scripts pass this directory to Docker as an absolute host path.
-At startup, Compose creates the named `rospin-workshop-data` volume as a
-bind-backed volume whose storage device is that host directory. It therefore
-appears in Docker Desktop's Volumes view while keeping datasets directly under
-the repository's `data/` directory.
+The workshop scripts mount this directory directly into the container using
+its absolute host path; no Docker-managed data volume is used. Every startup
+forces the workshop container to be recreated, writes a probe from the
+container into the host directory, and refuses to continue unless that file is
+visible on the host. This prevents recording into hidden container storage.
 
 ## Cube-in-bowl task
 
