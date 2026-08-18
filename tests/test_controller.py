@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -78,7 +79,13 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
             {"dataset_name": "test_session", "task": "move the end effector"},
         )
         recording_started = time.monotonic()
-        time.sleep(1.0)
+        perspective_before = controller.camera_jpeg("perspective")
+        controller.set_key("w", True)
+        time.sleep(0.35)
+        controller.set_key("w", False)
+        time.sleep(0.65)
+        perspective_during = controller.camera_jpeg("perspective")
+        assert perspective_during != perspective_before
         recorded_frames = controller.status()["frames_in_episode"]
         recording_elapsed = time.monotonic() - recording_started
         assert 24 <= recorded_frames <= 27
@@ -266,5 +273,64 @@ def test_only_wrist_and_perspective_renders_are_submitted(tmp_path) -> None:
             if pending["record_dataset"]
         )
         assert dataset_pending["remaining_cameras"] == {"wrist"}
+        viewer_pending = next(
+            pending
+            for pending in controller._pending_renders.values()
+            if not pending["record_dataset"]
+        )
+        assert viewer_pending["remaining_cameras"] == {"perspective"}
+    finally:
+        env.close()
+
+
+def test_recording_prioritizes_wrist_then_submits_viewer_only_perspective(
+    tmp_path,
+) -> None:
+    controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
+    env = SO101WorkshopEnv(render_mode=None)
+    controller.env = env
+    recorded_observations = []
+    controller._recorder = SimpleNamespace(
+        recording=True,
+        finalized=False,
+        dataset_path=None,
+        frames_in_episode=0,
+        num_episodes=0,
+        task="test",
+        add_frame=lambda observation, action: recorded_observations.append(observation),
+    )
+    try:
+        observation, _ = env.reset()
+        action = env.data.ctrl.astype(np.float32, copy=True)
+
+        assert controller._submit_renders(action) is True
+        assert controller._render_inflight == {"wrist"}
+        wrist_sequence = next(iter(controller._pending_renders))
+        controller._consume_render_result(
+            (
+                wrist_sequence,
+                "wrist",
+                {
+                    "observation.state": observation["observation.state"],
+                    "observation.images.wrist": np.zeros(
+                        (480, 640, 3), dtype=np.uint8
+                    ),
+                },
+                action,
+                controller._recording_generation,
+                controller._render_epoch,
+                None,
+            )
+        )
+
+        assert controller._render_inflight == {"perspective"}
+        assert len(recorded_observations) == 1
+        assert set(recorded_observations[0]) == {
+            "observation.state",
+            "observation.images.wrist",
+        }
+        perspective_pending = next(iter(controller._pending_renders.values()))
+        assert perspective_pending["record_dataset"] is False
+        assert perspective_pending["remaining_cameras"] == {"perspective"}
     finally:
         env.close()
