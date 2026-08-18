@@ -259,26 +259,210 @@ trajectory function.
 
 ### Participant API
 
-| Call | Purpose |
-|---|---|
-| `ctx.object_position("name")` | read an object's position after the seeded reset |
-| `ctx.current_joints` | read the six measured MuJoCo joint positions in radians |
-| `ctx.move_to(position)` | use a tabletop-safe vertical/horizontal path |
-| `ctx.move_linear(position)` | follow a straight Cartesian segment |
-| `ctx.move_relative(x=..., y=..., z=...)` | move relative to the measured current pose |
-| `ctx.move_joints([...])` | move to six absolute MuJoCo joint positions in radians |
-| `ctx.open_gripper()` | open to the configured joint limit |
-| `ctx.close_gripper(until_contact=True)` | close until the limit or detected contact |
-| `ctx.wait(seconds)` | pause the program |
-| `ctx.wait_until_settled("name")` | wait for an object to stop moving |
-| `ctx.move_home()` | return to the configured home pose |
-| `ctx.assert_condition(test, message)` | fail the episode when an assumption is false |
+Cartesian positions are `[x, y, z]` NumPy arrays in metres in the world frame.
+Adding a list such as `[0.0, 0.0, 0.13]` adds the three values element by
+element. Joint positions are in radians and use this order: shoulder pan,
+shoulder lift, elbow flex, wrist flex, wrist roll, then gripper.
 
-Every movement begins from measured state. Use `ctx.rng` for seeded variation,
-so preview and recording reproduce the same randomized path. Mark only intended
-contact segments with `allow_contact=True`. The arm has five arm joints, so the
-Cartesian planner targets XYZ rather than an arbitrary six-dimensional pose;
-use `move_joints()` when a specific joint posture is required.
+**`ctx.object_position("name")`**
+
+```python
+bowl = ctx.object_position("bowl")
+```
+
+This looks up the bowl after the seeded task reset and returns its current
+world position as `[x, y, z]`. It only reads state; it does not move the bowl or
+the robot. Use `"cube"` to read the randomized cube position in the same way.
+
+**`ctx.current_position`**
+
+```python
+eef = ctx.current_position
+target = eef + [0.0, 0.0, 0.10]
+```
+
+This returns the measured end-effector world position as `[x, y, z]`. The
+example calculates a target 10 cm above the current tool position without
+moving there yet. Pass `target` to `ctx.move_linear(...)`, or use the equivalent
+`ctx.move_relative(z=0.10)` call.
+
+**`ctx.current_joints`**
+
+```python
+joints = ctx.current_joints
+joints[4] += joints[0]
+```
+
+This returns a copy of the six measured MuJoCo joint positions. The example
+adds the shoulder-pan angle at index `0` to the wrist-roll target at index `4`.
+Changing the returned array does not move the robot until it is passed to
+`ctx.move_joints(...)`.
+
+**`ctx.task_success`**
+
+```python
+success_now = ctx.task_success
+```
+
+This reads the task's current success result as a Boolean. It is only a
+snapshot; it does not wait for success. The trajectory runner performs the
+configured success-hold check after the participant function returns, so most
+programs can simply finish their release and retreat phases without polling
+this property themselves.
+
+**`ctx.move_to(position)`**
+
+```python
+bowl = ctx.object_position("bowl")
+ctx.move_to(
+    bowl + [0.0, 0.0, 0.13],
+    speed=0.05,
+    safe_height=0.90,
+    name="move_above_bowl",
+)
+```
+
+`bowl` contains `[bowl_x, bowl_y, bowl_z]`. Adding
+`[0.0, 0.0, 0.13]` keeps its X and Y coordinates and places the target 13 cm
+above its Z coordinate. The robot moves vertically to at least the world
+`safe_height`, travels horizontally above the target, and then moves vertically
+to the result. Cartesian `speed` is in metres per second. `name` is the phase
+shown by the generator and in errors.
+
+**`ctx.move_linear(position)`**
+
+```python
+cube = ctx.object_position("cube")
+ctx.move_linear(
+    cube + [0.012, 0.0, -0.004],
+    speed=0.025,
+    allow_contact=True,
+    name="descend_to_cube",
+)
+```
+
+This adds 1.2 cm in world X, nothing in Y, and subtracts 4 mm in world Z from
+the cube position. It then follows one straight Cartesian segment from the
+measured end-effector position to that result. Use `allow_contact=True` only
+when contact is intentional; it lets the phase finish against an object instead
+of requiring the usual exact, contact-free endpoint. `speed` is in metres per
+second.
+
+**`ctx.move_relative(x=..., y=..., z=...)`**
+
+```python
+ctx.move_relative(z=0.10, speed=0.035, name="lift_cube")
+```
+
+This reads the current measured end-effector position, adds
+`[0.0, 0.0, 0.10]`, and calls the linear planner with the result. The example
+moves straight up by 10 cm. Positive and negative X, Y, and Z offsets can be
+combined, and all offsets are in metres.
+
+**`ctx.move_joints([...])`**
+
+```python
+grasp_joints = ctx.current_joints
+grasp_joints[4] += grasp_joints[0]
+ctx.move_joints(grasp_joints, speed=0.7, name="align_gripper")
+```
+
+This moves all six joints to absolute MuJoCo angles. The example starts with
+the measured joints, modifies only wrist roll, and sends the complete result as
+the new target. Joint `speed` is in radians per second, and targets are clipped
+to the configured joint limits. Use this method when a particular joint posture
+matters; Cartesian moves constrain XYZ but do not command an arbitrary tool
+orientation on the five-axis arm.
+
+**`ctx.open_gripper()`**
+
+```python
+ctx.open_gripper(timeout=6.0)
+```
+
+This commands the gripper to its configured open joint limit and waits until it
+arrives. The phase fails if the target is not reached within `timeout` seconds.
+
+**`ctx.close_gripper(until_contact=True)`**
+
+```python
+ctx.close_gripper(until_contact=True, timeout=4.0)
+```
+
+This commands the gripper toward its closed joint limit. With
+`until_contact=True`, it also succeeds when force and stalled motion indicate
+that the fingers are holding an object. With `False`, it must reach the closed
+limit. The phase fails if neither accepted condition occurs before `timeout`.
+
+**`ctx.wait(seconds)`**
+
+```python
+ctx.wait(0.4, name="release_cube")
+```
+
+This pauses the trajectory program for 0.4 seconds while simulation physics
+continues and the robot holds its latest targets. Waits can be between 0 and 30
+seconds. `name` is reported as the current phase.
+
+**`ctx.wait_until_settled("name")`**
+
+```python
+ctx.wait_until_settled(
+    "cube",
+    timeout=3.0,
+    linear_speed=0.03,
+    angular_speed=0.3,
+)
+```
+
+This repeatedly measures the cube and returns once the magnitude of its linear
+velocity is at most `0.03` m/s and its angular velocity is at most `0.3` rad/s.
+It fails if the object is still moving after three seconds. The object name must
+match a name defined by the task.
+
+**`ctx.move_home()`**
+
+```python
+ctx.move_home(
+    speed=0.7,
+    preserve_gripper=True,
+    name="return_home",
+)
+```
+
+This moves the five arm joints to the configured home angles. With
+`preserve_gripper=True`, it keeps the current commanded gripper target instead
+of replacing it with the home gripper angle. This is useful after releasing an
+object because returning the arm home will not close the gripper again. Joint
+`speed` is in radians per second.
+
+**`ctx.assert_condition(test, message)`**
+
+```python
+cube = ctx.object_position("cube")
+ctx.assert_condition(cube[2] > 0.75, "Cube is not on the tabletop")
+```
+
+This evaluates the Boolean expression. A true value lets the program continue.
+A false value stops the trajectory with the supplied message, causing that
+attempt to fail instead of saving a bad demonstration.
+
+**`ctx.seed` and `ctx.rng`**
+
+```python
+episode_seed = ctx.seed
+side_offset = ctx.rng.uniform(-0.008, 0.008)
+target = ctx.object_position("bowl") + [side_offset, 0.0, 0.13]
+```
+
+`ctx.seed` is the integer seed assigned to the current episode. `ctx.rng` is a
+NumPy random generator initialized from that seed. The example produces a
+random X offset between -8 mm and +8 mm and adds it to the bowl target. Use
+`ctx.rng`, rather than an unseeded random generator, so the same seed produces
+the same path during preview, preflight, and recording.
+
+Every movement begins from measured state. Mark only intended contact segments
+with `allow_contact=True`.
 
 ### Preview and generate
 
