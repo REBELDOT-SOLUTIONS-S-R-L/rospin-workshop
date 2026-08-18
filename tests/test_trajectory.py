@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ from rospin_workshop.controller import WorkshopController
 from rospin_workshop.env import HOME_JOINT_POSITIONS, SO101WorkshopEnv
 from rospin_workshop.trajectory.planner import TrajectoryPlanner
 from rospin_workshop.trajectory.program import load_trajectory_program
+from rospin_workshop.trajectory.runner import EpisodeContext
 
 
 def test_participant_program_loader_is_hot_loaded_and_confined(tmp_path) -> None:
@@ -83,3 +86,37 @@ def test_trajectory_control_uses_rate_limited_joint_targets(tmp_path) -> None:
 def test_runtime_config_has_hot_mounted_trajectory_root(tmp_path) -> None:
     config = RuntimeConfig(data_root=tmp_path, trajectories_root=Path("programs"))
     assert config.trajectories_root == Path("programs")
+
+
+def test_participant_api_returns_object_world_orientation() -> None:
+    class StubController:
+        config = SimpleNamespace(control_hz=60)
+
+        @staticmethod
+        def status() -> dict:
+            return {
+                "error": None,
+                "task_objects": {
+                    "cube": {
+                        "position": [0.4, 0.0, 0.75],
+                        "quaternion": [2.0, 0.0, 0.0, 0.0],
+                    }
+                },
+            }
+
+    context = EpisodeContext(
+        StubController(),  # type: ignore[arg-type]
+        SimpleNamespace(),  # type: ignore[arg-type]
+        seed=13,
+        stop_event=threading.Event(),
+    )
+
+    orientation = context.object_orientation("cube")
+
+    np.testing.assert_allclose(orientation, [1.0, 0.0, 0.0, 0.0])
+    orientation[0] = 0.0
+    np.testing.assert_allclose(
+        context.object_orientation("cube"), [1.0, 0.0, 0.0, 0.0]
+    )
+    with pytest.raises(KeyError, match="missing"):
+        context.object_orientation("missing")

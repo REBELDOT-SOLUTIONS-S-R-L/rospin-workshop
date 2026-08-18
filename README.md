@@ -274,6 +274,18 @@ This looks up the bowl after the seeded task reset and returns its current
 world position as `[x, y, z]`. It only reads state; it does not move the bowl or
 the robot. Use `"cube"` to read the randomized cube position in the same way.
 
+**`ctx.object_orientation("name")`**
+
+```python
+cube_orientation = ctx.object_orientation("cube")
+```
+
+This returns the cube's current world-frame orientation as the normalized
+quaternion `[w, x, y, z]`. For example, `[1.0, 0.0, 0.0, 0.0]` means no
+rotation relative to the world frame. The returned NumPy array is a snapshot;
+changing it does not rotate the object. Call the method again after the object
+moves to read its latest orientation.
+
 **`ctx.current_position`**
 
 ```python

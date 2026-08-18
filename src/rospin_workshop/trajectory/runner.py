@@ -105,6 +105,24 @@ class EpisodeContext:
             raise KeyError(f"Task has no object named {name!r}")
         return np.asarray(objects[name]["position"], dtype=np.float64)
 
+    def object_orientation(self, name: str) -> np.ndarray:
+        """Return an object's world-frame quaternion in ``[w, x, y, z]`` order."""
+
+        objects = self._status().get("task_objects", {})
+        if name not in objects:
+            raise KeyError(f"Task has no object named {name!r}")
+        quaternion = np.asarray(objects[name]["quaternion"], dtype=np.float64)
+        if quaternion.shape != (4,) or not np.all(np.isfinite(quaternion)):
+            raise TrajectoryExecutionError(
+                f"Task object {name!r} orientation is unavailable"
+            )
+        norm = float(np.linalg.norm(quaternion))
+        if norm <= np.finfo(np.float64).eps:
+            raise TrajectoryExecutionError(
+                f"Task object {name!r} orientation is unavailable"
+            )
+        return quaternion / norm
+
     def _execute_plan(
         self,
         plan: MotionPlan,
