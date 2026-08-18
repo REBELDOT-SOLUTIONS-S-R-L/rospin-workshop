@@ -17,7 +17,7 @@ services:
           create_host_path: false
       - ./trajectories:/workspace/trajectories:ro
     environment:
-      MUJOCO_GL: osmesa
+      MUJOCO_GL: egl
       ROSPIN_DATA_ROOT: /workspace/data
       ROSPIN_TASKS_DIR: /workspace/tasks
       ROSPIN_TRAJECTORIES_DIR: /workspace/trajectories

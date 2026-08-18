@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,6 @@ from rospin_workshop.tasks import TaskDefinition, TaskRegistry
 LOGGER = logging.getLogger(__name__)
 
 PERSPECTIVE_MAX_RENDER_WIDTH = 640
-PERSPECTIVE_RECORDING_HZ = 5.0
 DATASET_CAMERA_NAMES = ("wrist",)
 RENDER_CAMERA_NAMES = DATASET_CAMERA_NAMES + ("perspective",)
 
@@ -252,10 +253,12 @@ class WorkshopController:
                 BaseException | None,
             ]
         ] = queue.Queue()
-        # OSMesa is not safe under concurrent rendering in this workload. Keep
-        # independent camera contexts, but never execute native Mesa calls at
-        # the same time (the previous concurrent path eventually segfaulted in
-        # libOSMesa during long synthetic batches).
+        # Independent EGL contexts can render concurrently. OSMesa remains a
+        # supported explicit fallback, but its native calls must be serialized
+        # because concurrent long-running batches can crash in libOSMesa.
+        self._serialize_rendering = (
+            os.environ.get("MUJOCO_GL", "osmesa").strip().lower() != "egl"
+        )
         self._render_lock = threading.Lock()
         self._render_inflight: set[str] = set()
         self._render_sequence = 0
@@ -263,7 +266,6 @@ class WorkshopController:
         self._render_requested = threading.Event()
         self._render_epoch = 0
         self._recording_generation = 0
-        self._next_recording_perspective_at = 0.0
         self._commands: queue.Queue[
             tuple[str, dict[str, Any], threading.Event, dict[str, Any]]
         ] = queue.Queue()
@@ -510,7 +512,7 @@ class WorkshopController:
             if self._selected_task is None:
                 raise RuntimeError("Render worker started without a selected task")
             image_width, image_height = self._camera_render_size(camera)
-            with self._render_lock:
+            with self._render_guard():
                 render_env = SO101WorkshopEnv(
                     task=self._selected_task,
                     render_mode="rgb_array",
@@ -530,7 +532,7 @@ class WorkshopController:
                     ) = self._render_requests[camera].get(timeout=0.1)
                 except queue.Empty:
                     continue
-                with self._render_lock:
+                with self._render_guard():
                     render_env.restore_simulation_snapshot(snapshot)
                     if camera_view is not None:
                         position, lookat = camera_view
@@ -552,8 +554,13 @@ class WorkshopController:
             self._render_results.put((-1, camera, None, None, None, -1, exc))
         finally:
             if render_env is not None:
-                with self._render_lock:
+                with self._render_guard():
                     render_env.close()
+
+    def _render_guard(self) -> Any:
+        if self._serialize_rendering:
+            return self._render_lock
+        return nullcontext()
 
     def _camera_render_size(self, camera: str) -> tuple[int, int]:
         """Keep the recorded wrist feed native while bounding viewer render cost."""
@@ -572,26 +579,10 @@ class WorkshopController:
         """Submit a wrist dataset frame and an independent viewer frame."""
 
         dataset_submitted = self._submit_camera_group(DATASET_CAMERA_NAMES, action)
-        # Outside recording, both viewer feeds run at the configured camera
-        # rate. During recording, perspective work is scheduled only after a
-        # wrist frame completes so serialized OSMesa rendering cannot take
-        # priority over the dataset camera.
-        if self._recorder is None or not self._recorder.recording:
-            self._submit_camera_group(("perspective",), action)
+        # The viewer-only perspective group is scheduled at the same configured
+        # rate but remains separate from the wrist dataset group.
+        self._submit_camera_group(("perspective",), action)
         return dataset_submitted
-
-    def _submit_recording_perspective_if_due(self, action: np.ndarray) -> None:
-        """Refresh the viewer during recording without adding a dataset frame."""
-
-        if self._recorder is None or not self._recorder.recording:
-            return
-        now = time.monotonic()
-        if now < self._next_recording_perspective_at:
-            return
-        if self._submit_camera_group(("perspective",), action):
-            self._next_recording_perspective_at = (
-                now + 1.0 / PERSPECTIVE_RECORDING_HZ
-            )
 
     def _submit_camera_group(
         self,
@@ -696,8 +687,6 @@ class WorkshopController:
             self._observation_sequence += 1
             self._observation_condition.notify_all()
             self._refresh_status_locked()
-        if camera == "wrist":
-            self._submit_recording_perspective_if_due(pending["action"])
 
     def _process_commands(self) -> None:
         while True:
@@ -893,7 +882,6 @@ class WorkshopController:
                     raise ValueError("recording seed must be an integer")
                 self._reset_task_environment(seed=seed_value)
                 self._recording_generation += 1
-                self._next_recording_perspective_at = 0.0
                 self._recorder.start_episode(
                     dataset_name=str(payload.get("dataset_name", "so101_session")),
                     task=self._selected_task.dataset_description,

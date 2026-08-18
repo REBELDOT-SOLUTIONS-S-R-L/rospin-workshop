@@ -21,6 +21,7 @@ MJCF_PATH = ROOT / "src/rospin_workshop/models/so101_workshop.xml"
 
 def test_compose_persists_data_to_verified_direct_host_bind() -> None:
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    assert compose["services"]["workshop"]["environment"]["MUJOCO_GL"] == "egl"
     volumes = compose["services"]["workshop"]["volumes"]
     data_mount = next(
         volume

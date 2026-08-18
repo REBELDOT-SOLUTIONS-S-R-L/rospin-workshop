@@ -27,6 +27,14 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
             image_height=72,
         )
     )
+    rendered_frames = {"wrist": 0, "perspective": 0}
+    encode_image = controller._encode_image
+
+    def count_encoded_frame(camera: str, rgb: np.ndarray) -> bytes:
+        rendered_frames[camera] += 1
+        return encode_image(camera, rgb)
+
+    controller._encode_image = count_encoded_frame
     controller.start()
     try:
         controller.select_task("cube_in_bowl")
@@ -79,6 +87,7 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
             {"dataset_name": "test_session", "task": "move the end effector"},
         )
         recording_started = time.monotonic()
+        rendered_before = dict(rendered_frames)
         perspective_before = controller.camera_jpeg("perspective")
         controller.set_key("w", True)
         time.sleep(0.35)
@@ -88,8 +97,13 @@ def test_threaded_teleop_and_real_lerobot_recording(tmp_path) -> None:
         assert perspective_during != perspective_before
         recorded_frames = controller.status()["frames_in_episode"]
         recording_elapsed = time.monotonic() - recording_started
+        wrist_renders = rendered_frames["wrist"] - rendered_before["wrist"]
+        perspective_renders = (
+            rendered_frames["perspective"] - rendered_before["perspective"]
+        )
         assert 24 <= recorded_frames <= 27
         assert 22.5 <= (recorded_frames - 1) / recording_elapsed <= 26.0
+        assert abs(perspective_renders - wrist_renders) <= 1
         controller.command("stop_recording", {})
         controller.command("finish_dataset", {})
         status = controller.status()
@@ -283,7 +297,7 @@ def test_only_wrist_and_perspective_renders_are_submitted(tmp_path) -> None:
         env.close()
 
 
-def test_recording_prioritizes_wrist_then_submits_viewer_only_perspective(
+def test_recording_submits_equal_rate_viewer_only_perspective(
     tmp_path,
 ) -> None:
     controller = WorkshopController(RuntimeConfig(data_root=tmp_path))
@@ -304,8 +318,12 @@ def test_recording_prioritizes_wrist_then_submits_viewer_only_perspective(
         action = env.data.ctrl.astype(np.float32, copy=True)
 
         assert controller._submit_renders(action) is True
-        assert controller._render_inflight == {"wrist"}
-        wrist_sequence = next(iter(controller._pending_renders))
+        assert controller._render_inflight == {"wrist", "perspective"}
+        wrist_sequence = next(
+            sequence
+            for sequence, pending in controller._pending_renders.items()
+            if pending["record_dataset"]
+        )
         controller._consume_render_result(
             (
                 wrist_sequence,
